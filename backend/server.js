@@ -6,11 +6,8 @@ const { Server } = require('socket.io');
 
 require('dotenv').config();
 
-const rideRoutes =
-  require('./routes/rideRoutes');
-
-const initializeRideSocket =
-  require('./socket/rideSocket');
+const rideRoutes = require('./routes/rideRoutes');
+const initializeRideSocket = require('./socket/rideSocket');
 
 /* =====================================================
    APP
@@ -22,33 +19,31 @@ const app = express();
    HTTP SERVER
 ===================================================== */
 
-const server =
-  http.createServer(app);
+const server = http.createServer(app);
 
 /* =====================================================
    SOCKET.IO
 ===================================================== */
 
-const io =
-  new Server(server, {
-    cors: {
-      origin: '*',
+const io = new Server(server, {
+  cors: {
+    origin: '*',
 
-      methods: [
-        'GET',
-        'POST',
-        'PATCH',
-        'PUT',
-        'DELETE',
-        'OPTIONS',
-      ],
-    },
-
-    transports: [
-      'websocket',
-      'polling',
+    methods: [
+      'GET',
+      'POST',
+      'PATCH',
+      'PUT',
+      'DELETE',
+      'OPTIONS',
     ],
-  });
+  },
+
+  transports: [
+    'websocket',
+    'polling',
+  ],
+});
 
 /* =====================================================
    INITIALIZE RYDO SOCKET
@@ -63,6 +58,7 @@ initializeRideSocket(io);
 app.use(
   cors({
     origin: '*',
+
     methods: [
       'GET',
       'POST',
@@ -74,98 +70,96 @@ app.use(
   })
 );
 
-app.use(
-  express.json()
-);
+app.use(express.json());
 
 /* =====================================================
    REQUEST LOGGER
 ===================================================== */
 
-app.use(
-  (req, res, next) => {
-    console.log(
-      `RYDO: ${req.method} ${req.originalUrl}`
-    );
+app.use((req, res, next) => {
+  console.log(
+    `RYDO: ${req.method} ${req.originalUrl}`
+  );
 
-    next();
-  }
-);
+  next();
+});
 
 /* =====================================================
    MONGODB CONNECTION
 ===================================================== */
 
-mongoose
-  .connect(
-    process.env.MONGODB_URI
-  )
-  .then(() => {
-    console.log(
-      'RYDO: MongoDB connected'
-    );
-  })
-  .catch((error) => {
-    console.error(
-      'RYDO: MongoDB connection failed'
-    );
+const mongoUri = process.env.MONGODB_URI;
 
-    console.error(
-      error.message
-    );
-  });
+if (!mongoUri) {
+  console.error(
+    'RYDO: MONGODB_URI is not configured in .env'
+  );
+} else {
+  mongoose
+    .connect(mongoUri)
+    .then(() => {
+      console.log(
+        'RYDO: MongoDB connected'
+      );
+    })
+    .catch((error) => {
+      console.error(
+        'RYDO: MongoDB connection failed'
+      );
+
+      console.error(
+        error.message
+      );
+    });
+}
 
 /* =====================================================
    HOME
 ===================================================== */
 
-app.get(
-  '/',
-  (req, res) => {
-    res.json({
-      success: true,
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
 
-      message:
-        'RYDO backend is running',
+    message:
+      'RYDO backend is running',
 
-      status:
-        'online',
+    status:
+      'online',
 
-      socket:
-        'enabled',
-    });
-  }
-);
+    socket:
+      'enabled',
+  });
+});
 
 /* =====================================================
    SOCKET STATUS
 ===================================================== */
 
-app.get(
-  '/socket-status',
-  (req, res) => {
-    res.json({
-      success: true,
+app.get('/socket-status', (req, res) => {
+  res.json({
+    success: true,
 
-      message:
-        'RYDO Socket.IO server is running',
+    message:
+      'RYDO Socket.IO server is running',
 
-      connectedClients:
-        io.engine.clientsCount,
-    });
-  }
-);
+    connectedClients:
+      io.engine.clientsCount,
+  });
+});
 
-app.get(
-  '/api/health',
-  (req, res) => {
-    res.json({
-      success: true,
-      message:
-        'RYDO backend is running',
-    });
-  }
-);
+/* =====================================================
+   API HEALTH
+===================================================== */
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+
+    message:
+      'RYDO backend is running',
+  });
+});
 
 /* =====================================================
    API ROUTES
@@ -180,22 +174,20 @@ app.use(
    404 HANDLER
 ===================================================== */
 
-app.use(
-  (req, res) => {
-    console.log(
-      'RYDO: Unknown endpoint:',
-      req.method,
-      req.originalUrl
-    );
+app.use((req, res) => {
+  console.log(
+    'RYDO: Unknown endpoint:',
+    req.method,
+    req.originalUrl
+  );
 
-    res.status(404).json({
-      success: false,
+  res.status(404).json({
+    success: false,
 
-      message:
-        `Endpoint not found: ${req.method} ${req.originalUrl}`,
-    });
-  }
-);
+    message:
+      `Endpoint not found: ${req.method} ${req.originalUrl}`,
+  });
+});
 
 /* =====================================================
    GLOBAL ERROR HANDLER
@@ -213,6 +205,10 @@ app.use(
     );
 
     console.error(error);
+
+    if (res.headersSent) {
+      return next(error);
+    }
 
     res.status(500).json({
       success: false,

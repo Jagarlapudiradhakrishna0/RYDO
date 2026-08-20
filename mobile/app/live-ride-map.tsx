@@ -30,23 +30,28 @@ import MapView, {
 
 import * as Location from 'expo-location';
 
-import { io, Socket } from 'socket.io-client';
-import { API_URL, SOCKET_URL } from '@/constants/network';
+import {
+  io,
+  Socket,
+} from 'socket.io-client';
 
-/* =====================================================
-   BACKEND
-===================================================== */
+import {
+  API_URL,
+  SOCKET_URL,
+} from '@/constants/network';
+
 
 /* =====================================================
    OSRM
-===================================================== */
+   ===================================================== */
 
 const OSRM_URL =
   'https://router.project-osrm.org/route/v1/driving';
 
+
 /* =====================================================
    TYPES
-===================================================== */
+   ===================================================== */
 
 type Rider = {
   _id?: string;
@@ -54,11 +59,13 @@ type Rider = {
   joinedAt?: string;
 };
 
+
 type RoutePoint = {
   name: string;
   latitude: number;
   longitude: number;
 };
+
 
 type RouteData = {
   start: RoutePoint | null;
@@ -66,15 +73,13 @@ type RouteData = {
   stops: RoutePoint[];
 };
 
+
 type CaptainLocation = {
   latitude: number;
   longitude: number;
   updatedAt?: string;
 };
 
-/* =====================================================
-   LIVE MEMBER LOCATION
-===================================================== */
 
 type LiveMemberLocation = {
   memberId: string;
@@ -85,13 +90,11 @@ type LiveMemberLocation = {
   updatedAt?: string;
 };
 
-/* =====================================================
-   SOCKET LOCATION PAYLOAD
-===================================================== */
 
 type SocketLocationPayload = {
+  socketId?: string;
+  memberId: string;
   rideCode: string;
-  memberId?: string;
   userName: string;
   role: 'captain' | 'rider';
   latitude: number;
@@ -99,15 +102,17 @@ type SocketLocationPayload = {
   updatedAt?: string;
 };
 
+
 /* =====================================================
    LIVE RIDE MAP
-===================================================== */
+   ===================================================== */
 
 export default function LiveRideMap() {
 
+
   /* ===================================================
      PARAMS
-  =================================================== */
+     =================================================== */
 
   const {
     rideCode,
@@ -115,425 +120,528 @@ export default function LiveRideMap() {
     captainName,
     role,
     userName,
-  } = useLocalSearchParams<{
-    rideCode?: string;
-    rideName?: string;
-    captainName?: string;
-    role?: string;
-    userName?: string;
-  }>();
+  } =
+    useLocalSearchParams<{
+      rideCode?: string;
+      rideName?: string;
+      captainName?: string;
+      role?: string;
+      userName?: string;
+    }>();
+
+
+  /* ===================================================
+     DISPLAY VALUES
+     =================================================== */
 
   const displayRideCode =
-    String(rideCode || '------')
+    String(
+      rideCode || '------'
+    )
       .trim()
       .toUpperCase();
 
+
   const displayRideName =
-    String(rideName || 'RYDO RIDE');
+    String(
+      rideName || 'RYDO RIDE'
+    );
+
 
   const displayCaptain =
-    String(captainName || 'Captain');
+    String(
+      captainName || 'Captain'
+    );
+
 
   const normalizedRole =
-    String(role || 'captain')
+    String(
+      role || 'captain'
+    )
       .toLowerCase()
       .trim();
+
 
   const isCaptain =
     normalizedRole !== 'rider';
 
+
   const currentUserName =
     isCaptain
       ? displayCaptain
-      : String(userName || 'Rider').trim();
+      : String(
+          userName || 'Rider'
+        ).trim();
+
 
   /* ===================================================
      MEMBER ID
-  =================================================== */
 
-  /*
-     Each phone needs a stable ID while this screen
-     is active.
-
-     For Captain:
-       captain-CAPTAIN_NAME
-
-     For Rider:
-       rider-RIDER_NAME
-
-     The backend can also provide its own ID.
-  */
+     Same format as backend.
+     =================================================== */
 
   const memberIdRef =
     useRef<string>('');
 
+
   if (!memberIdRef.current) {
 
     const cleanName =
-      currentUserName;
+      currentUserName
+        .trim()
+        .toLowerCase()
+        .replace(
+          /\s+/g,
+          '-'
+        );
 
     memberIdRef.current =
       `${
         isCaptain
           ? 'captain'
           : 'rider'
-      }-${cleanName
-        .trim()
-        .toLowerCase()
-        .replace(
-          /\s+/g,
-          '-'
-        )}`;
+      }-${cleanName}`;
+
   }
+
 
   /* ===================================================
      LOCATION
-  =================================================== */
+     =================================================== */
 
-  const [location, setLocation] =
-    useState<Location.LocationObjectCoords | null>(
-      null
-    );
+  const [
+    location,
+    setLocation,
+  ] =
+    useState<
+      Location.LocationObjectCoords | null
+    >(null);
 
-  const [locationLoading, setLocationLoading] =
+
+  const [
+    locationLoading,
+    setLocationLoading,
+  ] =
     useState(true);
 
-  const [locationPermission, setLocationPermission] =
+
+  const [
+    locationPermission,
+    setLocationPermission,
+  ] =
     useState(false);
 
-  /* ===================================================
-     CAPTAIN LOCATION FROM BACKEND
-  =================================================== */
 
-  const [captainLocation, setCaptainLocation] =
-    useState<CaptainLocation | null>(
-      null
-    );
+  /* ===================================================
+     CAPTAIN LOCATION
+     =================================================== */
+
+  const [
+    captainLocation,
+    setCaptainLocation,
+  ] =
+    useState<
+      CaptainLocation | null
+    >(null);
+
 
   /* ===================================================
      ALL LIVE MEMBER LOCATIONS
-  =================================================== */
+     =================================================== */
 
   const [
     liveMemberLocations,
     setLiveMemberLocations,
-  ] = useState<
-    Record<
-      string,
-      LiveMemberLocation
-    >
-  >({});
+  ] =
+    useState<
+      Record<
+        string,
+        LiveMemberLocation
+      >
+    >({});
+
 
   /* ===================================================
      SOCKET
-  =================================================== */
+     =================================================== */
 
   const socketRef =
-    useRef<Socket | null>(null);
+    useRef<
+      Socket | null
+    >(null);
+
 
   const [
     socketConnected,
     setSocketConnected,
-  ] = useState(false);
+  ] =
+    useState(false);
+
 
   /* ===================================================
      ROUTE
-  =================================================== */
+     =================================================== */
 
-  const [routeData, setRouteData] =
+  const [
+    routeData,
+    setRouteData,
+  ] =
     useState<RouteData>({
       start: null,
       destination: null,
       stops: [],
     });
 
-  const [roadRoute, setRoadRoute] =
+
+  const [
+    roadRoute,
+    setRoadRoute,
+  ] =
     useState<LatLng[]>([]);
 
-  const [routeLoading, setRouteLoading] =
+
+  const [
+    routeLoading,
+    setRouteLoading,
+  ] =
     useState(true);
+
 
   /* ===================================================
      CREW
-  =================================================== */
+     =================================================== */
 
-  const [riders, setRiders] =
+  const [
+    riders,
+    setRiders,
+  ] =
     useState<Rider[]>([]);
 
-  const [crewLoading, setCrewLoading] =
+
+  const [
+    crewLoading,
+    setCrewLoading,
+  ] =
     useState(true);
+
 
   /* ===================================================
      MAP
-  =================================================== */
+     =================================================== */
 
   const mapRef =
     useRef<MapView | null>(null);
 
-  const [mapReady, setMapReady] =
+
+  const [
+    mapReady,
+    setMapReady,
+  ] =
     useState(false);
+
 
   /* ===================================================
      CONTROL
-  =================================================== */
+     =================================================== */
 
   const mountedRef =
     useRef(true);
 
+
   const fetchingRide =
     useRef(false);
 
+
   /* ===================================================
-     SOCKET LOCATION SEND TIMER
-  =================================================== */
+     SOCKET LOCATION TIMER
+     =================================================== */
 
   const lastSocketLocationTime =
     useRef(0);
 
+
   /* ===================================================
      GET RIDE
-  =================================================== */
+     =================================================== */
 
-  const fetchRide = async () => {
-
-    if (
-      !displayRideCode ||
-      displayRideCode === '------'
-    ) {
-      return;
-    }
-
-    if (!SOCKET_URL) {
-      console.log(
-        'RYDO: Socket URL is not configured. Set EXPO_PUBLIC_API_URL (and optionally EXPO_PUBLIC_SOCKET_URL).'
-      );
-      return;
-    }
-
-    if (fetchingRide.current) {
-      return;
-    }
-
-    fetchingRide.current = true;
-
-    try {
-
-      const code =
-        String(displayRideCode)
-          .trim()
-          .toUpperCase();
-
-      const response =
-        await fetch(
-          `${API_URL}/api/rides/${encodeURIComponent(
-            code
-          )}`
-        );
-
-      const data =
-        await response.json();
+  const fetchRide =
+    async () => {
 
       if (
-        !response.ok ||
-        !data.success
+        !displayRideCode ||
+        displayRideCode === '------'
       ) {
-
-        console.log(
-          'RYDO: Unable to get live ride'
-        );
-
         return;
       }
 
-      if (!mountedRef.current) {
+
+      if (
+        fetchingRide.current
+      ) {
         return;
       }
 
-      const ride =
-        data.ride;
-
-      /* =============================================
-         CAPTAIN LIVE LOCATION
-      ============================================= */
-
-      const backendCaptainLocation =
-        ride?.captainLocation;
-
-      if (
-        backendCaptainLocation &&
-        typeof backendCaptainLocation.latitude ===
-          'number' &&
-        typeof backendCaptainLocation.longitude ===
-          'number'
-      ) {
-
-        setCaptainLocation({
-          latitude:
-            backendCaptainLocation.latitude,
-
-          longitude:
-            backendCaptainLocation.longitude,
-
-          updatedAt:
-            backendCaptainLocation.updatedAt,
-        });
-
-      } else {
-
-        setCaptainLocation(null);
-
-      }
-
-      /* =============================================
-         RIDERS
-      ============================================= */
-
-      const backendRiders =
-        Array.isArray(ride?.riders)
-          ? ride.riders
-          : [];
-
-      setRiders(
-        backendRiders.map(
-          (rider: any) => ({
-
-            _id:
-              rider?._id,
-
-            name:
-              rider?.name ||
-              'Rider',
-
-            joinedAt:
-              rider?.joinedAt,
-
-          })
-        )
-      );
-
-      setCrewLoading(false);
-
-      /* =============================================
-         ROUTE
-      ============================================= */
-
-      const backendRoute =
-        ride?.route || {};
-
-      /* =============================================
-         START
-      ============================================= */
-
-      const start =
-        backendRoute.start &&
-        typeof backendRoute.start.latitude ===
-          'number' &&
-        typeof backendRoute.start.longitude ===
-          'number'
-          ? {
-
-              name:
-                backendRoute.start.name ||
-                'Start',
-
-              latitude:
-                backendRoute.start.latitude,
-
-              longitude:
-                backendRoute.start.longitude,
-
-            }
-          : null;
-
-      /* =============================================
-         DESTINATION
-      ============================================= */
-
-      const destination =
-        backendRoute.destination &&
-        typeof backendRoute.destination.latitude ===
-          'number' &&
-        typeof backendRoute.destination.longitude ===
-          'number'
-          ? {
-
-              name:
-                backendRoute.destination.name ||
-                'Destination',
-
-              latitude:
-                backendRoute.destination.latitude,
-
-              longitude:
-                backendRoute.destination.longitude,
-
-            }
-          : null;
-
-      /* =============================================
-         STOPS
-      ============================================= */
-
-      const stops =
-        Array.isArray(
-          backendRoute.stops
-        )
-          ? backendRoute.stops
-              .filter(
-                (stop: any) =>
-                  stop &&
-                  typeof stop.latitude ===
-                    'number' &&
-                  typeof stop.longitude ===
-                    'number'
-              )
-              .map(
-                (stop: any) => ({
-
-                  name:
-                    stop.name ||
-                    'Stop',
-
-                  latitude:
-                    stop.latitude,
-
-                  longitude:
-                    stop.longitude,
-
-                })
-              )
-          : [];
-
-      setRouteData({
-        start,
-        destination,
-        stops,
-      });
-
-    } catch (error) {
-
-      console.log(
-        'RYDO: Live ride fetch error:',
-        error
-      );
-
-    } finally {
 
       fetchingRide.current =
-        false;
+        true;
 
-    }
-  };
+
+      try {
+
+        const code =
+          String(
+            displayRideCode
+          )
+            .trim()
+            .toUpperCase();
+
+
+        const response =
+          await fetch(
+            `${API_URL}/api/rides/${encodeURIComponent(
+              code
+            )}`
+          );
+
+
+        const data =
+          await response.json();
+
+
+        if (
+          !response.ok ||
+          !data.success
+        ) {
+
+          console.log(
+            'RYDO: Unable to get live ride'
+          );
+
+          return;
+        }
+
+
+        if (
+          !mountedRef.current
+        ) {
+          return;
+        }
+
+
+        const ride =
+          data.ride;
+
+
+        /* =============================================
+           CAPTAIN LOCATION
+           ============================================= */
+
+        const backendCaptainLocation =
+          ride?.captainLocation;
+
+
+        if (
+          backendCaptainLocation &&
+          typeof backendCaptainLocation.latitude ===
+            'number' &&
+          typeof backendCaptainLocation.longitude ===
+            'number'
+        ) {
+
+          setCaptainLocation({
+
+            latitude:
+              backendCaptainLocation.latitude,
+
+            longitude:
+              backendCaptainLocation.longitude,
+
+            updatedAt:
+              backendCaptainLocation.updatedAt,
+
+          });
+
+        } else {
+
+          setCaptainLocation(null);
+
+        }
+
+
+        /* =============================================
+           RIDERS
+           ============================================= */
+
+        const backendRiders =
+          Array.isArray(
+            ride?.riders
+          )
+            ? ride.riders
+            : [];
+
+
+        setRiders(
+          backendRiders.map(
+            (
+              rider: any
+            ) => ({
+
+              _id:
+                rider?._id,
+
+              name:
+                rider?.name ||
+                'Rider',
+
+              joinedAt:
+                rider?.joinedAt,
+
+            })
+          )
+        );
+
+
+        setCrewLoading(false);
+
+
+        /* =============================================
+           ROUTE
+           ============================================= */
+
+        const backendRoute =
+          ride?.route || {};
+
+
+        /* =============================================
+           START
+           ============================================= */
+
+        const start =
+          backendRoute.start &&
+          typeof backendRoute.start.latitude ===
+            'number' &&
+          typeof backendRoute.start.longitude ===
+            'number'
+            ? {
+
+                name:
+                  backendRoute.start.name ||
+                  'Start',
+
+                latitude:
+                  backendRoute.start.latitude,
+
+                longitude:
+                  backendRoute.start.longitude,
+
+              }
+            : null;
+
+
+        /* =============================================
+           DESTINATION
+           ============================================= */
+
+        const destination =
+          backendRoute.destination &&
+          typeof backendRoute.destination.latitude ===
+            'number' &&
+          typeof backendRoute.destination.longitude ===
+            'number'
+            ? {
+
+                name:
+                  backendRoute.destination.name ||
+                  'Destination',
+
+                latitude:
+                  backendRoute.destination.latitude,
+
+                longitude:
+                  backendRoute.destination.longitude,
+
+              }
+            : null;
+
+
+        /* =============================================
+           STOPS
+           ============================================= */
+
+        const stops =
+          Array.isArray(
+            backendRoute.stops
+          )
+            ? backendRoute.stops
+                .filter(
+                  (
+                    stop: any
+                  ) =>
+                    stop &&
+                    typeof stop.latitude ===
+                      'number' &&
+                    typeof stop.longitude ===
+                      'number'
+                )
+                .map(
+                  (
+                    stop: any
+                  ) => ({
+
+                    name:
+                      stop.name ||
+                      'Stop',
+
+                    latitude:
+                      stop.latitude,
+
+                    longitude:
+                      stop.longitude,
+
+                  })
+                )
+            : [];
+
+
+        setRouteData({
+
+          start,
+
+          destination,
+
+          stops,
+
+        });
+
+      } catch (error) {
+
+        console.log(
+          'RYDO: Live ride fetch error:',
+          error
+        );
+
+      } finally {
+
+        fetchingRide.current =
+          false;
+
+      }
+
+    };
+
 
   /* ===================================================
      LOAD RIDE
-  =================================================== */
+     =================================================== */
 
   useEffect(() => {
 
-    mountedRef.current = true;
+    mountedRef.current =
+      true;
+
 
     fetchRide();
+
 
     const interval =
       setInterval(
@@ -541,20 +649,24 @@ export default function LiveRideMap() {
         5000
       );
 
+
     return () => {
 
       mountedRef.current =
         false;
 
-      clearInterval(interval);
+      clearInterval(
+        interval
+      );
 
     };
 
   }, [displayRideCode]);
 
+
   /* ===================================================
      SOCKET.IO CONNECTION
-  =================================================== */
+     =================================================== */
 
   useEffect(() => {
 
@@ -564,6 +676,17 @@ export default function LiveRideMap() {
     ) {
       return;
     }
+
+
+    if (!SOCKET_URL) {
+
+      console.log(
+        'RYDO: SOCKET_URL is not configured'
+      );
+
+      return;
+    }
+
 
     console.log(
       '================================'
@@ -584,10 +707,13 @@ export default function LiveRideMap() {
     );
 
     console.log(
-      'Member:',
-      isCaptain
-        ? displayCaptain
-        : 'Rider'
+      'Member ID:',
+      memberIdRef.current
+    );
+
+    console.log(
+      'User:',
+      currentUserName
     );
 
     console.log(
@@ -601,10 +727,12 @@ export default function LiveRideMap() {
       '================================'
     );
 
+
     const socket =
       io(
         SOCKET_URL,
         {
+
           transports: [
             'websocket',
           ],
@@ -612,7 +740,8 @@ export default function LiveRideMap() {
           autoConnect:
             false,
 
-          reconnection: true,
+          reconnection:
+            true,
 
           reconnectionAttempts:
             Infinity,
@@ -622,17 +751,18 @@ export default function LiveRideMap() {
 
           timeout:
             10000,
+
         }
       );
 
-    socket.connect();
 
     socketRef.current =
       socket;
 
+
     /* =============================================
-       CONNECTED
-    ============================================= */
+       CONNECT
+       ============================================= */
 
     socket.on(
       'connect',
@@ -647,17 +777,26 @@ export default function LiveRideMap() {
           socket.id
         );
 
-        setSocketConnected(
-          true
-        );
+
+        if (
+          mountedRef.current
+        ) {
+
+          setSocketConnected(
+            true
+          );
+
+        }
+
 
         /* =========================================
-           JOIN RIDE ROOM
-        ========================================= */
+           JOIN RIDE
+           ========================================= */
 
         socket.emit(
           'joinRide',
           {
+
             rideCode:
               displayRideCode,
 
@@ -671,13 +810,15 @@ export default function LiveRideMap() {
               isCaptain
                 ? 'captain'
                 : 'rider',
+
           }
         );
 
+
         console.log(
-          'RYDO: Joined ride room:',
-          displayRideCode
+          'RYDO: JOIN RIDE SENT'
         );
+
 
         socket.emit(
           'getSocketInfo'
@@ -686,31 +827,80 @@ export default function LiveRideMap() {
       }
     );
 
+
+    /* =============================================
+       RIDE JOINED
+       ============================================= */
+
     socket.on(
       'rideJoined',
       (
         payload: any
       ) => {
+
         console.log(
-          'RYDO: Ride joined successfully',
+          'RYDO: Ride joined successfully:',
           payload
         );
+
       }
     );
 
+
+    /* =============================================
+       SOCKET INFO
+       ============================================= */
+
+    socket.on(
+      'socketInfo',
+      (
+        payload: any
+      ) => {
+
+        console.log(
+          'RYDO: Socket info:',
+          payload
+        );
+
+      }
+    );
+
+
+    /* =============================================
+       SOCKET ERROR
+       ============================================= */
+
+    socket.on(
+      'socketError',
+      (
+        payload: any
+      ) => {
+
+        console.log(
+          'RYDO: Socket error:',
+          payload
+        );
+
+      }
+    );
+
+
     /* =============================================
        DISCONNECTED
-    ============================================= */
+       ============================================= */
 
     socket.on(
       'disconnect',
-      (reason) => {
+      (
+        reason
+      ) => {
 
         console.log(
           'RYDO: Socket.IO disconnected:',
           reason
         );
 
+
         if (
           mountedRef.current
         ) {
@@ -724,19 +914,23 @@ export default function LiveRideMap() {
       }
     );
 
+
     /* =============================================
        CONNECT ERROR
-    ============================================= */
+       ============================================= */
 
     socket.on(
       'connect_error',
-      (error) => {
+      (
+        error
+      ) => {
 
         console.log(
           'RYDO: Socket.IO connection error:',
           error.message
         );
 
+
         if (
           mountedRef.current
         ) {
@@ -750,9 +944,10 @@ export default function LiveRideMap() {
       }
     );
 
+
     /* =============================================
        RECEIVE LIVE LOCATION
-    ============================================= */
+       ============================================= */
 
     socket.on(
       'locationUpdated',
@@ -766,21 +961,23 @@ export default function LiveRideMap() {
           payload
         );
 
-        if (
-          !payload
-        ) {
+
+        if (!payload) {
           return;
         }
+
 
         const latitude =
           Number(
             payload.latitude
           );
 
+
         const longitude =
           Number(
             payload.longitude
           );
+
 
         if (
           !Number.isFinite(
@@ -791,9 +988,17 @@ export default function LiveRideMap() {
           )
         ) {
 
-          return;
+          console.log(
+            'RYDO: Invalid location received'
+          );
 
+          return;
         }
+
+
+        /* =========================================
+           ROLE
+           ========================================= */
 
         const roleValue =
           payload.role ===
@@ -801,238 +1006,104 @@ export default function LiveRideMap() {
             ? 'captain'
             : 'rider';
 
+
+        /* =========================================
+           MEMBER ID
+           ========================================= */
+
         const memberId =
           String(
             payload.memberId ||
-            `${
-              roleValue
-            }-${
+            `${roleValue}-${String(
               payload.userName ||
               'member'
-            }`
+            )
+              .trim()
+              .toLowerCase()
+              .replace(
+                /\s+/g,
+                '-'
+              )}`
           );
 
-        const memberLocation:
-          LiveMemberLocation = {
-
-          memberId,
-
-          name:
-            payload.userName ||
-            (
-              roleValue ===
-              'captain'
-                ? displayCaptain
-                : 'Rider'
-            ),
-
-          role:
-            roleValue,
-
-          latitude,
-
-          longitude,
-
-          updatedAt:
-            payload.updatedAt ||
-            new Date().toISOString(),
-
-        };
-
-        if (
-          mountedRef.current
-        ) {
-
-          setLiveMemberLocations(
-            (
-              previous
-            ) => ({
-
-              ...previous,
-
-              [memberId]:
-                memberLocation,
-
-            })
-          );
-
-        }
 
         /* =========================================
-           CAPTAIN LOCATION
-        ========================================= */
+           LOCATION OBJECT
+           ========================================= */
+
+        const memberLocation:
+          LiveMemberLocation =
+          {
+
+            memberId,
+
+            name:
+              payload.userName ||
+              (
+                roleValue ===
+                'captain'
+                  ? displayCaptain
+                  : 'Rider'
+              ),
+
+            role:
+              roleValue,
+
+            latitude,
+
+            longitude,
+
+            updatedAt:
+              payload.updatedAt ||
+              new Date().toISOString(),
+
+          };
+
+
+        if (
+          !mountedRef.current
+        ) {
+          return;
+        }
+
+
+        /* =========================================
+           UPDATE ALL MEMBERS
+           ========================================= */
+
+        setLiveMemberLocations(
+          (
+            previous
+          ) => ({
+
+            ...previous,
+
+            [memberId]:
+              memberLocation,
+
+          })
+        );
+
+
+        /* =========================================
+           UPDATE CAPTAIN LOCATION
+           ========================================= */
 
         if (
           roleValue ===
           'captain'
         ) {
 
-          if (
-            mountedRef.current
-          ) {
-
-            setCaptainLocation({
-              latitude,
-              longitude,
-
-              updatedAt:
-                payload.updatedAt ||
-                new Date().toISOString(),
-            });
-
-          }
-
-        }
-
-      }
-    );
-
-    /* =============================================
-       RECEIVE CURRENT RIDE LOCATIONS
-    ============================================= */
-
-    socket.on(
-      'rideLocations',
-      (
-        locations: any
-      ) => {
-
-        console.log(
-          'RYDO: CURRENT RIDE LOCATIONS:',
-          locations
-        );
-
-        if (
-          !Array.isArray(
-            locations
-          )
-        ) {
-
-          return;
-
-        }
-
-        const locationMap:
-          Record<
-            string,
-            LiveMemberLocation
-          > = {};
-
-        locations.forEach(
-          (
-            item: any
-          ) => {
-
-            const latitude =
-              Number(
-                item?.latitude
-              );
-
-            const longitude =
-              Number(
-                item?.longitude
-              );
-
-            if (
-              !Number.isFinite(
-                latitude
-              ) ||
-              !Number.isFinite(
-                longitude
-              )
-            ) {
-
-              return;
-
-            }
-
-            const roleValue =
-              item?.role ===
-              'captain'
-                ? 'captain'
-                : 'rider';
-
-            const memberId =
-              String(
-                item?.memberId ||
-                `${
-                  roleValue
-                }-${
-                  item?.name ||
-                  'member'
-                }`
-              );
-
-            locationMap[
-              memberId
-            ] = {
-
-              memberId,
-
-              name:
-                item?.name ||
-                (
-                  roleValue ===
-                  'captain'
-                    ? displayCaptain
-                    : 'Rider'
-                ),
-
-              role:
-                roleValue,
-
-              latitude,
-
-              longitude,
-
-              updatedAt:
-                item?.updatedAt ||
-                new Date().toISOString(),
-
-            };
-
-          }
-        );
-
-        if (
-          mountedRef.current
-        ) {
-
-          setLiveMemberLocations(
-            locationMap
-          );
-
-        }
-
-        /* =========================================
-           FIND CAPTAIN
-        ========================================= */
-
-        const captain =
-          Object.values(
-            locationMap
-          ).find(
-            (
-              item
-            ) =>
-              item.role ===
-              'captain'
-          );
-
-        if (
-          captain &&
-          mountedRef.current
-        ) {
-
           setCaptainLocation({
-            latitude:
-              captain.latitude,
 
-            longitude:
-              captain.longitude,
+            latitude,
+
+            longitude,
 
             updatedAt:
-              captain.updatedAt,
+              payload.updatedAt ||
+              new Date().toISOString(),
+
           });
 
         }
@@ -1040,9 +1111,10 @@ export default function LiveRideMap() {
       }
     );
 
+
     /* =============================================
-       ROOM MEMBER JOINED
-    ============================================= */
+       USER JOINED
+       ============================================= */
 
     socket.on(
       'userJoined',
@@ -1055,14 +1127,16 @@ export default function LiveRideMap() {
           member
         );
 
+
         fetchRide();
 
       }
     );
 
+
     /* =============================================
-       ROOM MEMBER LEFT
-    ============================================= */
+       USER LEFT
+       ============================================= */
 
     socket.on(
       'userLeft',
@@ -1075,22 +1149,28 @@ export default function LiveRideMap() {
           member
         );
 
+
         const memberId =
-          member?.userName
-            ? `${
-                member?.role === 'captain'
-                  ? 'captain'
-                  : 'rider'
-              }-${String(
-                member.userName
-              )
-                .trim()
-                .toLowerCase()
-                .replace(
-                  /\s+/g,
-                  '-'
-                )}`
-            : null;
+          member?.memberId ||
+          (
+            member?.userName
+              ? `${
+                  member?.role ===
+                  'captain'
+                    ? 'captain'
+                    : 'rider'
+                }-${String(
+                  member.userName
+                )
+                  .trim()
+                  .toLowerCase()
+                  .replace(
+                    /\s+/g,
+                    '-'
+                  )}`
+              : null
+          );
+
 
         if (
           memberId &&
@@ -1106,67 +1186,105 @@ export default function LiveRideMap() {
                 ...previous,
               };
 
+
               delete updated[
                 memberId
               ];
+
 
               return updated;
 
             }
           );
+
         }
+
 
         fetchRide();
 
       }
     );
 
+
+    /* =============================================
+       USER DISCONNECTED
+       ============================================= */
+
     socket.on(
       'userDisconnected',
       (
         member: any
       ) => {
+
+        console.log(
+          'RYDO: MEMBER DISCONNECTED:',
+          member
+        );
+
+
         const memberId =
-          member?.userName
-            ? `${
-                member?.role === 'captain'
-                  ? 'captain'
-                  : 'rider'
-              }-${String(
-                member.userName
-              )
-                .trim()
-                .toLowerCase()
-                .replace(
-                  /\s+/g,
-                  '-'
-                )}`
-            : null;
+          member?.memberId ||
+          (
+            member?.userName
+              ? `${
+                  member?.role ===
+                  'captain'
+                    ? 'captain'
+                    : 'rider'
+                }-${String(
+                  member.userName
+                )
+                  .trim()
+                  .toLowerCase()
+                  .replace(
+                    /\s+/g,
+                    '-'
+                  )}`
+              : null
+          );
+
 
         if (
           memberId &&
           mountedRef.current
         ) {
+
           setLiveMemberLocations(
             (
               previous
             ) => {
+
               const updated = {
                 ...previous,
               };
+
+
               delete updated[
                 memberId
               ];
+
+
               return updated;
+
             }
           );
+
         }
+
       }
     );
 
+
+    /* =============================================
+       CONNECT SOCKET
+       ============================================= */
+
+    socket.connect();
+
+
     /* =============================================
        CLEANUP
-    ============================================= */
+       ============================================= */
 
     return () => {
 
@@ -1174,9 +1292,119 @@ export default function LiveRideMap() {
         'RYDO: Disconnecting Socket.IO'
       );
 
-      socket.emit(
-        'leaveRide',
+
+      if (
+        socket.connected
+      ) {
+
+        socket.emit(
+          'leaveRide'
+        );
+
+      }
+
+
+      socket.removeAllListeners();
+
+
+      socket.disconnect();
+
+
+      if (
+        socketRef.current ===
+        socket
+      ) {
+
+        socketRef.current =
+          null;
+
+      }
+
+
+      if (
+        mountedRef.current
+      ) {
+
+        setSocketConnected(
+          false
+        );
+
+      }
+
+    };
+
+  }, [
+    displayRideCode,
+    isCaptain,
+    displayCaptain,
+    currentUserName,
+  ]);
+
+
+  /* ===================================================
+     SEND LOCATION THROUGH SOCKET
+     =================================================== */
+
+  const sendLocationThroughSocket =
+    (
+      coords:
+        Location.LocationObjectCoords
+    ) => {
+
+      const socket =
+        socketRef.current;
+
+
+      if (!socket) {
+
+        console.log(
+          'RYDO: Socket unavailable'
+        );
+
+        return;
+
+      }
+
+
+      if (!socket.connected) {
+
+        console.log(
+          'RYDO: Socket not connected'
+        );
+
+        return;
+
+      }
+
+
+      const now =
+        Date.now();
+
+
+      /*
+         Send at most once every
+         1.5 seconds.
+      */
+
+      if (
+        now -
+          lastSocketLocationTime.current <
+        1500
+      ) {
+
+        return;
+
+      }
+
+
+      lastSocketLocationTime.current =
+        now;
+
+
+      const payload:
+        SocketLocationPayload =
         {
+
           rideCode:
             displayRideCode,
 
@@ -1190,118 +1418,24 @@ export default function LiveRideMap() {
             isCaptain
               ? 'captain'
               : 'rider',
-        }
-      );
 
-      socket.removeAllListeners();
+          latitude:
+            coords.latitude,
 
-      socket.disconnect();
+          longitude:
+            coords.longitude,
 
-      socketRef.current =
-        null;
+          updatedAt:
+            new Date().toISOString(),
 
-      setSocketConnected(
-        false
-      );
+        };
 
-    };
-
-  }, [
-    displayRideCode,
-    isCaptain,
-    displayCaptain,
-    currentUserName,
-  ]);
-
-  /* ===================================================
-     SEND LOCATION THROUGH SOCKET
-  =================================================== */
-
-  const sendLocationThroughSocket =
-    (
-      coords:
-        Location.LocationObjectCoords
-    ) => {
-
-      const socket =
-        socketRef.current;
-
-      if (
-        !socket
-      ) {
-
-        console.log(
-          'RYDO: Socket unavailable'
-        );
-
-        return;
-
-      }
-
-      if (
-        !socket.connected
-      ) {
-
-        console.log(
-          'RYDO: Socket not connected'
-        );
-
-        return;
-
-      }
-
-      const now =
-        Date.now();
-
-      /*
-         Avoid sending too frequently.
-      */
-
-      if (
-        now -
-          lastSocketLocationTime.current <
-          1500
-      ) {
-
-        return;
-
-      }
-
-      lastSocketLocationTime.current =
-        now;
-
-      const payload:
-        SocketLocationPayload = {
-
-        rideCode:
-          displayRideCode,
-
-        memberId:
-          memberIdRef.current,
-
-        userName:
-          currentUserName,
-
-        role:
-          isCaptain
-            ? 'captain'
-            : 'rider',
-
-        latitude:
-          coords.latitude,
-
-        longitude:
-          coords.longitude,
-
-        updatedAt:
-          new Date().toISOString(),
-
-      };
 
       console.log(
         'RYDO: SENDING LIVE LOCATION:',
         payload
       );
+
 
       socket.emit(
         'updateLocation',
@@ -1310,9 +1444,10 @@ export default function LiveRideMap() {
 
     };
 
+
   /* ===================================================
      UPDATE CAPTAIN LOCATION THROUGH REST
-  =================================================== */
+     =================================================== */
 
   const updateCaptainLocationREST =
     async (
@@ -1320,13 +1455,10 @@ export default function LiveRideMap() {
         Location.LocationObjectCoords
     ) => {
 
-      if (
-        !isCaptain
-      ) {
-
+      if (!isCaptain) {
         return;
-
       }
+
 
       try {
 
@@ -1359,12 +1491,22 @@ export default function LiveRideMap() {
             }
           );
 
-        if (
-          !response.ok
-        ) {
 
-          const data =
-            await response.json();
+        if (!response.ok) {
+
+          let data:
+            any = null;
+
+
+          try {
+
+            data =
+              await response.json();
+
+          } catch {
+            // Ignore JSON parsing error
+          }
+
 
           console.log(
             'RYDO: Captain REST location update failed:',
@@ -1384,17 +1526,21 @@ export default function LiveRideMap() {
 
     };
 
+
   /* ===================================================
      LOCATION TRACKING
-  =================================================== */
+     =================================================== */
 
   useEffect(() => {
 
     let subscription:
-      | Location.LocationSubscription
-      | null = null;
+      Location.LocationSubscription |
+      null = null;
 
-    let cancelled = false;
+
+    let cancelled =
+      false;
+
 
     const startTracking =
       async () => {
@@ -1403,20 +1549,19 @@ export default function LiveRideMap() {
 
           /* =========================================
              REQUEST PERMISSION
-          ========================================= */
+             ========================================= */
 
           const {
             status,
           } =
-            await Location.requestForegroundPermissionsAsync();
+            await Location
+              .requestForegroundPermissionsAsync();
 
-          if (
-            cancelled
-          ) {
 
+          if (cancelled) {
             return;
-
           }
+
 
           if (
             status !==
@@ -1435,66 +1580,57 @@ export default function LiveRideMap() {
 
           }
 
+
           setLocationPermission(
             true
           );
 
+
           /* =========================================
              GET CURRENT LOCATION
-          ========================================= */
+             ========================================= */
 
           const current =
-            await Location.getCurrentPositionAsync(
-              {
-                accuracy:
-                  Location.Accuracy.High,
-              }
-            );
+            await Location
+              .getCurrentPositionAsync(
+                {
 
-          if (
-            cancelled
-          ) {
+                  accuracy:
+                    Location.Accuracy.High,
 
+                }
+              );
+
+
+          if (cancelled) {
             return;
-
           }
+
 
           setLocation(
             current.coords
           );
 
+
           setLocationLoading(
             false
           );
 
+
           /* =========================================
-             SEND INITIAL SOCKET LOCATION
-          ========================================= */
+             INITIAL SOCKET LOCATION
+             ========================================= */
 
-          setTimeout(
-            () => {
-
-              if (
-                !cancelled
-              ) {
-
-                sendLocationThroughSocket(
-                  current.coords
-                );
-
-              }
-
-            },
-            1000
+          sendLocationThroughSocket(
+            current.coords
           );
+
 
           /* =========================================
              CAPTAIN INITIAL REST LOCATION
-          ========================================= */
+             ========================================= */
 
-          if (
-            isCaptain
-          ) {
+          if (isCaptain) {
 
             await updateCaptainLocationREST(
               current.coords
@@ -1502,68 +1638,68 @@ export default function LiveRideMap() {
 
           }
 
+
           /* =========================================
-             WATCH LIVE LOCATION
-          ========================================= */
+             WATCH LOCATION
+             ========================================= */
 
           subscription =
-            await Location.watchPositionAsync(
-              {
+            await Location
+              .watchPositionAsync(
+                {
 
-                accuracy:
-                  Location.Accuracy.High,
+                  accuracy:
+                    Location.Accuracy.High,
 
-                timeInterval:
-                  3000,
+                  timeInterval:
+                    3000,
 
-                distanceInterval:
-                  5,
+                  distanceInterval:
+                    5,
 
-              },
+                },
 
-              async (
-                newLocation
-              ) => {
+                async (
+                  newLocation
+                ) => {
 
-                if (
-                  cancelled
-                ) {
+                  if (cancelled) {
+                    return;
+                  }
 
-                  return;
 
-                }
+                  const coords =
+                    newLocation.coords;
 
-                const coords =
-                  newLocation.coords;
 
-                setLocation(
-                  coords
-                );
-
-                /* =================================
-                   EVERYONE → SOCKET
-                ================================= */
-
-                sendLocationThroughSocket(
-                  coords
-                );
-
-                /* =================================
-                   CAPTAIN → REST FALLBACK
-                ================================= */
-
-                if (
-                  isCaptain
-                ) {
-
-                  await updateCaptainLocationREST(
+                  setLocation(
                     coords
                   );
 
-                }
 
-              }
-            );
+                  /* ==============================
+                     EVERYONE → SOCKET
+                     ============================== */
+
+                  sendLocationThroughSocket(
+                    coords
+                  );
+
+
+                  /* ==============================
+                     CAPTAIN → REST FALLBACK
+                     ============================== */
+
+                  if (isCaptain) {
+
+                    await updateCaptainLocationREST(
+                      coords
+                    );
+
+                  }
+
+                }
+              );
 
         } catch (error) {
 
@@ -1572,9 +1708,8 @@ export default function LiveRideMap() {
             error
           );
 
-          if (
-            !cancelled
-          ) {
+
+          if (!cancelled) {
 
             setLocationLoading(
               false
@@ -1586,15 +1721,17 @@ export default function LiveRideMap() {
 
       };
 
+
     startTracking();
+
 
     return () => {
 
-      cancelled = true;
+      cancelled =
+        true;
 
-      if (
-        subscription
-      ) {
+
+      if (subscription) {
 
         subscription.remove();
 
@@ -1605,11 +1742,13 @@ export default function LiveRideMap() {
   }, [
     displayRideCode,
     isCaptain,
+    currentUserName,
   ]);
+
 
   /* ===================================================
      GET ROAD ROUTE
-  =================================================== */
+     =================================================== */
 
   const fetchRoadRoute =
     async () => {
@@ -1629,22 +1768,26 @@ export default function LiveRideMap() {
 
       }
 
+
       try {
 
         setRouteLoading(
           true
         );
 
+
         const points:
-          RoutePoint[] = [
+          RoutePoint[] =
+          [
 
-          routeData.start,
+            routeData.start,
 
-          ...routeData.stops,
+            ...routeData.stops,
 
-          routeData.destination,
+            routeData.destination,
 
-        ];
+          ];
+
 
         const coordinates =
           points
@@ -1656,15 +1799,19 @@ export default function LiveRideMap() {
             )
             .join(';');
 
+
         const url =
           `${OSRM_URL}/${coordinates}` +
           `?overview=full&geometries=geojson`;
 
+
         const response =
           await fetch(url);
 
+
         const data =
           await response.json();
+
 
         if (
           !response.ok ||
@@ -1679,8 +1826,10 @@ export default function LiveRideMap() {
 
         }
 
+
         const geometry =
           data.routes[0].geometry;
+
 
         if (
           !geometry ||
@@ -1695,13 +1844,12 @@ export default function LiveRideMap() {
 
         }
 
+
         const coordinatesFromOSRM =
           geometry.coordinates.map(
             (
-              coordinate: [
-                number,
-                number
-              ]
+              coordinate:
+                [number, number]
             ) => ({
 
               longitude:
@@ -1712,6 +1860,7 @@ export default function LiveRideMap() {
 
             })
           );
+
 
         if (
           mountedRef.current
@@ -1729,6 +1878,7 @@ export default function LiveRideMap() {
           'RYDO: OSRM error:',
           error
         );
+
 
         setRoadRoute([]);
 
@@ -1748,9 +1898,10 @@ export default function LiveRideMap() {
 
     };
 
+
   /* ===================================================
      ROUTE EFFECT
-  =================================================== */
+     =================================================== */
 
   useEffect(() => {
 
@@ -1774,18 +1925,17 @@ export default function LiveRideMap() {
   }, [
     routeData.start?.latitude,
     routeData.start?.longitude,
-
     routeData.destination?.latitude,
     routeData.destination?.longitude,
-
     JSON.stringify(
       routeData.stops
     ),
   ]);
 
+
   /* ===================================================
      FIT MAP
-  =================================================== */
+     =================================================== */
 
   useEffect(() => {
 
@@ -1798,6 +1948,7 @@ export default function LiveRideMap() {
       return;
 
     }
+
 
     setTimeout(
       () => {
@@ -1840,80 +1991,86 @@ export default function LiveRideMap() {
     roadRoute,
   ]);
 
+
   /* ===================================================
      SOS
-  =================================================== */
+     =================================================== */
 
-  const handleSOS = () => {
+  const handleSOS =
+    () => {
 
-    Alert.alert(
-      'SOS',
-      'SOS system will be connected to all crew members in the next step.',
-      [
+      Alert.alert(
+        'SOS',
+        'SOS system will be connected to all crew members in the next step.',
+        [
 
-        {
-          text:
-            'CANCEL',
+          {
+            text:
+              'CANCEL',
 
-          style:
-            'cancel',
-        },
+            style:
+              'cancel',
+          },
 
-        {
-          text:
-            'OK',
-        },
+          {
+            text:
+              'OK',
+          },
 
-      ]
-    );
+        ]
+      );
 
-  };
+    };
+
 
   /* ===================================================
      BACK
-  =================================================== */
+     =================================================== */
 
-  const handleBack = () => {
+  const handleBack =
+    () => {
 
-    Alert.alert(
-      'Leave Live Ride?',
-      'Return to the previous screen?',
-      [
+      Alert.alert(
+        'Leave Live Ride?',
+        'Return to the previous screen?',
+        [
 
-        {
-          text:
-            'CANCEL',
+          {
+            text:
+              'CANCEL',
 
-          style:
-            'cancel',
-        },
+            style:
+              'cancel',
+          },
 
-        {
+          {
 
-          text:
-            'RETURN',
+            text:
+              'RETURN',
 
-          onPress:
-            () =>
-              router.back(),
+            onPress:
+              () =>
+                router.back(),
 
-        },
+          },
 
-      ]
-    );
+        ]
+      );
 
-  };
+    };
+
 
   /* ===================================================
      TOTAL MEMBERS
-  =================================================== */
+     =================================================== */
 
   const totalMembers =
     riders.length + 1;
 
+
   /* ===================================================
      MAP INITIAL COORDINATES
-  =================================================== */
+     =================================================== */
 
   const mapLatitude =
     captainLocation?.latitude ??
@@ -1921,24 +2078,27 @@ export default function LiveRideMap() {
     routeData.start?.latitude ??
     17.9689;
 
+
   const mapLongitude =
     captainLocation?.longitude ??
     location?.longitude ??
     routeData.start?.longitude ??
     79.5941;
 
+
   /* ===================================================
      LIVE MARKER LIST
-  =================================================== */
+     =================================================== */
 
   const liveMarkers =
     Object.values(
       liveMemberLocations
     );
 
+
   /* ===================================================
      RENDER
-  =================================================== */
+     =================================================== */
 
   return (
 
@@ -1951,13 +2111,15 @@ export default function LiveRideMap() {
         backgroundColor="#000000"
       />
 
+
       <View
         style={styles.container}
       >
 
+
         {/* =================================================
             MAP
-        ================================================= */}
+            ================================================= */}
 
         {location ||
         captainLocation ||
@@ -2017,9 +2179,10 @@ export default function LiveRideMap() {
 
           >
 
+
             {/* ===========================================
                 LIVE MEMBER MARKERS
-            =========================================== */}
+                =========================================== */}
 
             {liveMarkers.map(
               (
@@ -2089,9 +2252,10 @@ export default function LiveRideMap() {
               )
             )}
 
+
             {/* ===========================================
-                CAPTAIN FALLBACK MARKER
-            =========================================== */}
+                CAPTAIN FALLBACK
+                =========================================== */}
 
             {liveMarkers.filter(
               (
@@ -2125,9 +2289,10 @@ export default function LiveRideMap() {
 
               )}
 
+
             {/* ===========================================
                 CAPTAIN FALLBACK FOR RIDER
-            =========================================== */}
+                =========================================== */}
 
             {liveMarkers.filter(
               (
@@ -2161,9 +2326,10 @@ export default function LiveRideMap() {
 
               )}
 
+
             {/* ===========================================
                 START
-            =========================================== */}
+                =========================================== */}
 
             {routeData.start && (
 
@@ -2190,9 +2356,10 @@ export default function LiveRideMap() {
 
             )}
 
+
             {/* ===========================================
                 STOPS
-            =========================================== */}
+                =========================================== */}
 
             {routeData.stops.map(
               (
@@ -2230,9 +2397,10 @@ export default function LiveRideMap() {
               )
             )}
 
+
             {/* ===========================================
                 DESTINATION
-            =========================================== */}
+                =========================================== */}
 
             {routeData.destination && (
 
@@ -2263,9 +2431,10 @@ export default function LiveRideMap() {
 
             )}
 
+
             {/* ===========================================
                 ROAD ROUTE
-            =========================================== */}
+                =========================================== */}
 
             {roadRoute.length > 1 && (
 
@@ -2308,6 +2477,7 @@ export default function LiveRideMap() {
                 : 'LOADING MAP...'}
             </Text>
 
+
             <Text
               style={
                 styles.loadingText
@@ -2324,9 +2494,10 @@ export default function LiveRideMap() {
 
         )}
 
+
         {/* =================================================
             TOP HEADER
-        ================================================= */}
+            ================================================= */}
 
         <View
           style={styles.topOverlay}
@@ -2346,6 +2517,7 @@ export default function LiveRideMap() {
 
           </TouchableOpacity>
 
+
           <View
             style={styles.liveBadge}
           >
@@ -2353,6 +2525,7 @@ export default function LiveRideMap() {
             <View
               style={styles.liveDot}
             />
+
 
             <Text
               style={styles.liveText}
@@ -2366,9 +2539,10 @@ export default function LiveRideMap() {
 
         </View>
 
+
         {/* =================================================
             RIDE INFO
-        ================================================= */}
+            ================================================= */}
 
         <View
           style={styles.rideInfo}
@@ -2380,12 +2554,14 @@ export default function LiveRideMap() {
             RYDO • LIVE RIDE
           </Text>
 
+
           <Text
             style={styles.rideInfoName}
             numberOfLines={1}
           >
             {displayRideName}
           </Text>
+
 
           <Text
             style={styles.rideInfoCode}
@@ -2395,9 +2571,10 @@ export default function LiveRideMap() {
 
         </View>
 
+
         {/* =================================================
             ROUTE STATUS
-        ================================================= */}
+            ================================================= */}
 
         <View
           style={styles.routeBadge}
@@ -2408,6 +2585,7 @@ export default function LiveRideMap() {
               styles.routeStatusDot
             }
           />
+
 
           <Text
             style={
@@ -2423,9 +2601,10 @@ export default function LiveRideMap() {
 
         </View>
 
+
         {/* =================================================
-            CREW GLASS PANEL
-        ================================================= */}
+            CREW PANEL
+            ================================================= */}
 
         <View
           style={styles.crewPanel}
@@ -2445,6 +2624,7 @@ export default function LiveRideMap() {
                 CREW
               </Text>
 
+
               <Text
                 style={
                   styles.crewCount
@@ -2458,6 +2638,7 @@ export default function LiveRideMap() {
 
             </View>
 
+
             <View
               style={
                 styles.crewLiveIndicator
@@ -2469,6 +2650,7 @@ export default function LiveRideMap() {
                   styles.smallLiveDot
                 }
               />
+
 
               <Text
                 style={
@@ -2484,9 +2666,10 @@ export default function LiveRideMap() {
 
           </View>
 
+
           {/* ===========================================
               CAPTAIN
-          =========================================== */}
+              =========================================== */}
 
           <View
             style={styles.crewMember}
@@ -2508,6 +2691,7 @@ export default function LiveRideMap() {
 
             </View>
 
+
             <View
               style={
                 styles.memberDetails
@@ -2522,6 +2706,7 @@ export default function LiveRideMap() {
                 {displayCaptain}
               </Text>
 
+
               <Text
                 style={
                   styles.memberRole
@@ -2533,6 +2718,7 @@ export default function LiveRideMap() {
               </Text>
 
             </View>
+
 
             <View
               style={
@@ -2550,9 +2736,10 @@ export default function LiveRideMap() {
 
           </View>
 
+
           {/* ===========================================
               RIDERS
-          =========================================== */}
+              =========================================== */}
 
           {riders.map(
             (
@@ -2589,6 +2776,7 @@ export default function LiveRideMap() {
 
                 </View>
 
+
                 <View
                   style={
                     styles.memberDetails
@@ -2604,6 +2792,7 @@ export default function LiveRideMap() {
                     {rider.name}
                   </Text>
 
+
                   <Text
                     style={
                       styles.memberRole
@@ -2613,6 +2802,7 @@ export default function LiveRideMap() {
                   </Text>
 
                 </View>
+
 
                 <View
                   style={
@@ -2633,9 +2823,10 @@ export default function LiveRideMap() {
             )
           )}
 
+
           {/* ===========================================
-              EMPTY
-          =========================================== */}
+              EMPTY CREW
+              =========================================== */}
 
           {!crewLoading &&
             riders.length === 0 && (
@@ -2660,9 +2851,10 @@ export default function LiveRideMap() {
 
         </View>
 
+
         {/* =================================================
             LIVE MEMBER COUNT
-        ================================================= */}
+            ================================================= */}
 
         <View
           style={
@@ -2675,6 +2867,7 @@ export default function LiveRideMap() {
               styles.liveLocationDot
             }
           />
+
 
           <Text
             style={
@@ -2690,9 +2883,10 @@ export default function LiveRideMap() {
 
         </View>
 
+
         {/* =================================================
-            SOS BUTTON
-        ================================================= */}
+            SOS
+            ================================================= */}
 
         <TouchableOpacity
           activeOpacity={0.85}
@@ -2714,6 +2908,7 @@ export default function LiveRideMap() {
 
           </View>
 
+
           <View>
 
             <Text
@@ -2723,6 +2918,7 @@ export default function LiveRideMap() {
             >
               SOS
             </Text>
+
 
             <Text
               style={
@@ -2736,9 +2932,10 @@ export default function LiveRideMap() {
 
         </TouchableOpacity>
 
+
         {/* =================================================
             BOTTOM ROUTE INFO
-        ================================================= */}
+            ================================================= */}
 
         <View
           style={
@@ -2758,6 +2955,7 @@ export default function LiveRideMap() {
               }
             />
 
+
             <View>
 
               <Text
@@ -2767,6 +2965,7 @@ export default function LiveRideMap() {
               >
                 START
               </Text>
+
 
               <Text
                 style={
@@ -2782,11 +2981,13 @@ export default function LiveRideMap() {
 
           </View>
 
+
           <View
             style={
               styles.routeDivider
             }
           />
+
 
           <View
             style={
@@ -2800,6 +3001,7 @@ export default function LiveRideMap() {
               }
             />
 
+
             <View>
 
               <Text
@@ -2809,6 +3011,7 @@ export default function LiveRideMap() {
               >
                 DESTINATION
               </Text>
+
 
               <Text
                 style={
@@ -2832,510 +3035,566 @@ export default function LiveRideMap() {
     </SafeAreaView>
 
   );
+
 }
+
 
 /* =====================================================
    STYLES
-===================================================== */
-
-const styles = StyleSheet.create({
-
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-  },
-
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-
-  /* ================================================
-     LOADING
-  ================================================ */
-
-  loadingScreen: {
-    flex: 1,
-    backgroundColor: '#050505',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  loadingTitle: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 2,
-  },
-
-  loadingText: {
-    color: '#666666',
-    fontSize: 10,
-    marginTop: 8,
-    textAlign: 'center',
-  },
-
-  /* ================================================
-     LIVE MEMBER MARKER
-  ================================================ */
-
-  liveMarker: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor:
-      'rgba(255,255,255,0.25)',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  liveMarkerInner: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-  },
-
-  liveMarkerText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-
-  /* ================================================
-     TOP
-  ================================================ */
-
-  topOverlay: {
-    position: 'absolute',
-    top: 12,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor:
-      'rgba(0,0,0,0.75)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  backArrow: {
-    color: '#FFFFFF',
-    fontSize: 32,
-    fontWeight: '300',
-    marginTop: -4,
-  },
-
-  liveBadge: {
-    height: 36,
-    paddingHorizontal: 13,
-    borderRadius: 18,
-    backgroundColor:
-      'rgba(0,0,0,0.75)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.15)',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: '#FFFFFF',
-    marginRight: 7,
-  },
-
-  liveText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-
-  /* ================================================
-     RIDE INFO
-  ================================================ */
-
-  rideInfo: {
-    position: 'absolute',
-    top: 68,
-    left: 16,
-    right: 16,
-    backgroundColor:
-      'rgba(0,0,0,0.72)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.12)',
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderRadius: 4,
-  },
-
-  rideInfoLabel: {
-    color: '#777777',
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-  },
-
-  rideInfoName: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '800',
-    marginTop: 3,
-  },
-
-  rideInfoCode: {
-    color: '#777777',
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginTop: 3,
-  },
-
-  /* ================================================
-     ROUTE BADGE
-  ================================================ */
-
-  routeBadge: {
-    position: 'absolute',
-    top: 165,
-    left: 16,
-    backgroundColor:
-      'rgba(0,0,0,0.72)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 3,
-  },
-
-  routeStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-    marginRight: 7,
-  },
-
-  routeBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-  },
-
-  /* ================================================
-     CREW GLASS PANEL
-  ================================================ */
-
-  crewPanel: {
-    position: 'absolute',
-    top: 215,
-    right: 12,
-    width: 185,
-    backgroundColor:
-      'rgba(0,0,0,0.65)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.16)',
-    borderRadius: 8,
-    paddingHorizontal: 11,
-    paddingVertical: 11,
-  },
-
-  crewHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 9,
-    borderBottomWidth: 1,
-    borderBottomColor:
-      'rgba(255,255,255,0.10)',
-  },
-
-  crewLabel: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-  },
-
-  crewCount: {
-    color: '#666666',
-    fontSize: 7,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-
-  crewLiveIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  smallLiveDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-    marginRight: 5,
-  },
-
-  crewLiveText: {
-    color: '#999999',
-    fontSize: 6,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-
-  crewMember: {
-    minHeight: 45,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor:
-      'rgba(255,255,255,0.07)',
-  },
-
-  memberAvatar: {
-    width: 27,
-    height: 27,
-    borderRadius: 14,
-    backgroundColor:
-      'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.20)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '900',
-  },
-
-  memberDetails: {
-    flex: 1,
-    marginLeft: 8,
-  },
-
-  memberName: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-
-  memberRole: {
-    color: '#666666',
-    fontSize: 6,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    marginTop: 2,
-  },
-
-  memberOnline: {
-    width: 12,
-    alignItems: 'center',
-  },
-
-  onlineDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-  },
-
-  emptyCrew: {
-    paddingVertical: 12,
-  },
-
-  emptyCrewText: {
-    color: '#555555',
-    fontSize: 7,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-
-  /* ================================================
-     LIVE LOCATION BADGE
-  ================================================ */
-
-  liveLocationBadge: {
-    position: 'absolute',
-    top: 390,
-    right: 12,
-    backgroundColor:
-      'rgba(0,0,0,0.72)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.16)',
-    borderRadius: 12,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  liveLocationDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-    marginRight: 6,
-  },
-
-  liveLocationText: {
-    color: '#FFFFFF',
-    fontSize: 6,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-
-  /* ================================================
-     SOS
-  ================================================ */
-
-  sosButton: {
-    position: 'absolute',
-    bottom: 105,
-    left: 16,
-    right: 16,
-    height: 62,
-    borderRadius: 7,
-    backgroundColor:
-      'rgba(0,0,0,0.88)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.30)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  sosIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-
-  sosIconText: {
-    color: '#000000',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-
-  sosTitle: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 2,
-  },
-
-  sosSubtitle: {
-    color: '#777777',
-    fontSize: 6,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    marginTop: 2,
-  },
-
-  /* ================================================
-     BOTTOM ROUTE
-  ================================================ */
-
-  bottomRoutePanel: {
-    position: 'absolute',
-    bottom: 16,
-    left: 16,
-    right: 16,
-    minHeight: 76,
-    backgroundColor:
-      'rgba(0,0,0,0.86)',
-    borderWidth: 1,
-    borderColor:
-      'rgba(255,255,255,0.15)',
-    borderRadius: 6,
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  bottomRoutePoint: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  startDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#FFFFFF',
-    marginRight: 9,
-  },
-
-  destinationDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    backgroundColor: '#FFFFFF',
-    marginRight: 9,
-  },
-
-  routeDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor:
-      'rgba(255,255,255,0.15)',
-    marginHorizontal: 10,
-  },
-
-  bottomLabel: {
-    color: '#666666',
-    fontSize: 6,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    marginBottom: 3,
-  },
-
-  bottomName: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '700',
-    maxWidth: 110,
-  },
-
-});
+   ===================================================== */
+
+const styles =
+  StyleSheet.create({
+
+    safeArea: {
+      flex: 1,
+      backgroundColor: '#000000',
+    },
+
+
+    container: {
+      flex: 1,
+      backgroundColor: '#000000',
+    },
+
+
+    map: {
+      ...StyleSheet.absoluteFillObject,
+    },
+
+
+    /* ================================================
+       LOADING
+       ================================================ */
+
+    loadingScreen: {
+      flex: 1,
+      backgroundColor: '#050505',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+
+    loadingTitle: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '900',
+      letterSpacing: 2,
+    },
+
+
+    loadingText: {
+      color: '#666666',
+      fontSize: 10,
+      marginTop: 8,
+      textAlign: 'center',
+    },
+
+
+    /* ================================================
+       LIVE MEMBER MARKER
+       ================================================ */
+
+    liveMarker: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor:
+        'rgba(255,255,255,0.25)',
+      borderWidth: 2,
+      borderColor: '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+
+    liveMarkerInner: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: '#000000',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: '#FFFFFF',
+    },
+
+
+    liveMarkerText: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '900',
+    },
+
+
+    /* ================================================
+       TOP
+       ================================================ */
+
+    topOverlay: {
+      position: 'absolute',
+      top: 12,
+      left: 16,
+      right: 16,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+
+
+    backButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor:
+        'rgba(0,0,0,0.75)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.15)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+
+    backArrow: {
+      color: '#FFFFFF',
+      fontSize: 32,
+      fontWeight: '300',
+      marginTop: -4,
+    },
+
+
+    liveBadge: {
+      height: 36,
+      paddingHorizontal: 13,
+      borderRadius: 18,
+      backgroundColor:
+        'rgba(0,0,0,0.75)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.15)',
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+
+    liveDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: '#FFFFFF',
+      marginRight: 7,
+    },
+
+
+    liveText: {
+      color: '#FFFFFF',
+      fontSize: 9,
+      fontWeight: '900',
+      letterSpacing: 1.5,
+    },
+
+
+    /* ================================================
+       RIDE INFO
+       ================================================ */
+
+    rideInfo: {
+      position: 'absolute',
+      top: 68,
+      left: 16,
+      right: 16,
+      backgroundColor:
+        'rgba(0,0,0,0.72)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.12)',
+      paddingHorizontal: 14,
+      paddingVertical: 11,
+      borderRadius: 4,
+    },
+
+
+    rideInfoLabel: {
+      color: '#777777',
+      fontSize: 7,
+      fontWeight: '800',
+      letterSpacing: 1.5,
+    },
+
+
+    rideInfoName: {
+      color: '#FFFFFF',
+      fontSize: 18,
+      fontWeight: '800',
+      marginTop: 3,
+    },
+
+
+    rideInfoCode: {
+      color: '#777777',
+      fontSize: 8,
+      fontWeight: '700',
+      letterSpacing: 1,
+      marginTop: 3,
+    },
+
+
+    /* ================================================
+       ROUTE BADGE
+       ================================================ */
+
+    routeBadge: {
+      position: 'absolute',
+      top: 165,
+      left: 16,
+      backgroundColor:
+        'rgba(0,0,0,0.72)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.12)',
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: 3,
+    },
+
+
+    routeStatusDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: '#FFFFFF',
+      marginRight: 7,
+    },
+
+
+    routeBadgeText: {
+      color: '#FFFFFF',
+      fontSize: 7,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+    },
+
+
+    /* ================================================
+       CREW GLASS PANEL
+       ================================================ */
+
+    crewPanel: {
+      position: 'absolute',
+      top: 215,
+      right: 12,
+      width: 185,
+      backgroundColor:
+        'rgba(0,0,0,0.65)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.16)',
+      borderRadius: 8,
+      paddingHorizontal: 11,
+      paddingVertical: 11,
+    },
+
+
+    crewHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingBottom: 9,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        'rgba(255,255,255,0.10)',
+    },
+
+
+    crewLabel: {
+      color: '#FFFFFF',
+      fontSize: 10,
+      fontWeight: '900',
+      letterSpacing: 1.5,
+    },
+
+
+    crewCount: {
+      color: '#666666',
+      fontSize: 7,
+      fontWeight: '700',
+      letterSpacing: 1,
+      marginTop: 2,
+    },
+
+
+    crewLiveIndicator: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+
+    smallLiveDot: {
+      width: 5,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: '#FFFFFF',
+      marginRight: 5,
+    },
+
+
+    crewLiveText: {
+      color: '#999999',
+      fontSize: 6,
+      fontWeight: '800',
+      letterSpacing: 1,
+    },
+
+
+    crewMember: {
+      minHeight: 45,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderBottomWidth: 1,
+      borderBottomColor:
+        'rgba(255,255,255,0.07)',
+    },
+
+
+    memberAvatar: {
+      width: 27,
+      height: 27,
+      borderRadius: 14,
+      backgroundColor:
+        'rgba(255,255,255,0.12)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.20)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+
+    avatarText: {
+      color: '#FFFFFF',
+      fontSize: 9,
+      fontWeight: '900',
+    },
+
+
+    memberDetails: {
+      flex: 1,
+      marginLeft: 8,
+    },
+
+
+    memberName: {
+      color: '#FFFFFF',
+      fontSize: 10,
+      fontWeight: '700',
+    },
+
+
+    memberRole: {
+      color: '#666666',
+      fontSize: 6,
+      fontWeight: '800',
+      letterSpacing: 0.8,
+      marginTop: 2,
+    },
+
+
+    memberOnline: {
+      width: 12,
+      alignItems: 'center',
+    },
+
+
+    onlineDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: '#FFFFFF',
+    },
+
+
+    emptyCrew: {
+      paddingVertical: 12,
+    },
+
+
+    emptyCrewText: {
+      color: '#555555',
+      fontSize: 7,
+      fontWeight: '800',
+      letterSpacing: 1,
+    },
+
+
+    /* ================================================
+       LIVE LOCATION BADGE
+       ================================================ */
+
+    liveLocationBadge: {
+      position: 'absolute',
+      top: 390,
+      right: 12,
+      backgroundColor:
+        'rgba(0,0,0,0.72)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.16)',
+      borderRadius: 12,
+      paddingHorizontal: 9,
+      paddingVertical: 6,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+
+    liveLocationDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: '#FFFFFF',
+      marginRight: 6,
+    },
+
+
+    liveLocationText: {
+      color: '#FFFFFF',
+      fontSize: 6,
+      fontWeight: '900',
+      letterSpacing: 0.8,
+    },
+
+
+    /* ================================================
+       SOS
+       ================================================ */
+
+    sosButton: {
+      position: 'absolute',
+      bottom: 105,
+      left: 16,
+      right: 16,
+      height: 62,
+      borderRadius: 7,
+      backgroundColor:
+        'rgba(0,0,0,0.88)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.30)',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+
+    sosIcon: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+
+
+    sosIconText: {
+      color: '#000000',
+      fontSize: 18,
+      fontWeight: '900',
+    },
+
+
+    sosTitle: {
+      color: '#FFFFFF',
+      fontSize: 13,
+      fontWeight: '900',
+      letterSpacing: 2,
+    },
+
+
+    sosSubtitle: {
+      color: '#777777',
+      fontSize: 6,
+      fontWeight: '800',
+      letterSpacing: 1.5,
+      marginTop: 2,
+    },
+
+
+    /* ================================================
+       BOTTOM ROUTE
+       ================================================ */
+
+    bottomRoutePanel: {
+      position: 'absolute',
+      bottom: 16,
+      left: 16,
+      right: 16,
+      minHeight: 76,
+      backgroundColor:
+        'rgba(0,0,0,0.86)',
+      borderWidth: 1,
+      borderColor:
+        'rgba(255,255,255,0.15)',
+      borderRadius: 6,
+      paddingHorizontal: 13,
+      paddingVertical: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+
+    bottomRoutePoint: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+
+    startDot: {
+      width: 9,
+      height: 9,
+      borderRadius: 5,
+      backgroundColor: '#FFFFFF',
+      marginRight: 9,
+    },
+
+
+    destinationDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 2,
+      backgroundColor: '#FFFFFF',
+      marginRight: 9,
+    },
+
+
+    routeDivider: {
+      width: 1,
+      height: 32,
+      backgroundColor:
+        'rgba(255,255,255,0.15)',
+      marginHorizontal: 10,
+    },
+
+
+    bottomLabel: {
+      color: '#666666',
+      fontSize: 6,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      marginBottom: 3,
+    },
+
+
+    bottomName: {
+      color: '#FFFFFF',
+      fontSize: 9,
+      fontWeight: '700',
+      maxWidth: 110,
+    },
+
+  });

@@ -1,5 +1,6 @@
 /* =====================================================
    RYDO - SOCKET.IO RIDE SERVER
+
    File:
    backend/socket/rideSocket.js
 
@@ -9,43 +10,54 @@
    - Receive live GPS locations
    - Broadcast locations to everyone in the ride
    - Keep Captain and Rider locations separate
-===================================================== */
+   - Track memberId consistently
+   ===================================================== */
+
 
 /* =====================================================
    INITIALIZE SOCKET.IO
-===================================================== */
+   ===================================================== */
 
 function initializeRideSocket(io) {
+
   console.log('================================');
   console.log('RYDO: Socket.IO INITIALIZING');
   console.log('================================');
 
+
   /* ===================================================
      CONNECTION
-  =================================================== */
+     =================================================== */
 
   io.on('connection', (socket) => {
+
     console.log('================================');
     console.log('RYDO: SOCKET CONNECTED');
     console.log('Socket ID:', socket.id);
     console.log('================================');
 
+
     /* =================================================
        JOIN RIDE
+
        Event:
        joinRide
-       
+
        Data:
        {
          rideCode: 'ABC123',
+         memberId: 'captain-john',
          userName: 'John',
          role: 'captain'
        }
-    ================================================= */
+       ================================================= */
 
     socket.on('joinRide', (data) => {
+
       try {
+
         if (!data) {
+
           console.log(
             'RYDO: joinRide received empty data'
           );
@@ -53,68 +65,106 @@ function initializeRideSocket(io) {
           return;
         }
 
+
+        /* ---------------------------------------------
+           DATA
+           --------------------------------------------- */
+
         const rideCode =
-          String(
-            data.rideCode || ''
-          )
+          String(data.rideCode || '')
             .toUpperCase()
             .trim();
 
         const userName =
-          String(
-            data.userName || ''
-          ).trim();
+          String(data.userName || '')
+            .trim();
 
         const role =
-          String(
-            data.role || 'rider'
-          )
+          String(data.role || 'rider')
             .toLowerCase()
             .trim();
 
+        const memberId =
+          String(data.memberId || '')
+            .trim();
+
+
         /* ---------------------------------------------
            VALIDATION
-        --------------------------------------------- */
+           --------------------------------------------- */
 
         if (!rideCode) {
+
           socket.emit('socketError', {
-            message:
-              'Ride code is required',
+            message: 'Ride code is required',
           });
 
           return;
         }
+
 
         if (!userName) {
+
           socket.emit('socketError', {
-            message:
-              'User name is required',
+            message: 'User name is required',
           });
 
           return;
         }
 
+
         /* ---------------------------------------------
-           VALID ROLES
-        --------------------------------------------- */
+           MEMBER ID
+           --------------------------------------------- */
 
         const validRole =
           role === 'captain'
             ? 'captain'
             : 'rider';
 
+        const finalMemberId =
+          memberId ||
+          `${validRole}-${userName
+            .toLowerCase()
+            .replace(/\s+/g, '-')}`;
+
+
+        /* ---------------------------------------------
+           LEAVE PREVIOUS ROOM
+           --------------------------------------------- */
+
+        if (
+          socket.rideCode &&
+          socket.rideCode !== rideCode
+        ) {
+
+          socket.leave(
+            socket.rideCode
+          );
+
+          console.log(
+            'RYDO: Left previous ride room:',
+            socket.rideCode
+          );
+        }
+
+
         /* ---------------------------------------------
            JOIN SOCKET ROOM
-        --------------------------------------------- */
+           --------------------------------------------- */
 
         socket.join(rideCode);
 
+
         /* ---------------------------------------------
            SAVE SOCKET INFORMATION
-        --------------------------------------------- */
+           --------------------------------------------- */
 
         socket.rideCode =
           rideCode;
+
+        socket.memberId =
+          finalMemberId;
 
         socket.userName =
           userName;
@@ -122,9 +172,10 @@ function initializeRideSocket(io) {
         socket.role =
           validRole;
 
+
         /* ---------------------------------------------
            LOG
-        --------------------------------------------- */
+           --------------------------------------------- */
 
         console.log('================================');
         console.log(
@@ -133,6 +184,10 @@ function initializeRideSocket(io) {
         console.log(
           'Socket ID:',
           socket.id
+        );
+        console.log(
+          'Member ID:',
+          finalMemberId
         );
         console.log(
           'Ride Code:',
@@ -148,9 +203,10 @@ function initializeRideSocket(io) {
         );
         console.log('================================');
 
+
         /* ---------------------------------------------
            CONFIRM TO USER
-        --------------------------------------------- */
+           --------------------------------------------- */
 
         socket.emit(
           'rideJoined',
@@ -159,31 +215,44 @@ function initializeRideSocket(io) {
 
             rideCode,
 
+            memberId:
+              finalMemberId,
+
             userName,
 
-            role: validRole,
+            role:
+              validRole,
 
             message:
               'Connected to ride successfully',
           }
         );
 
+
         /* ---------------------------------------------
            INFORM EVERYONE ELSE
-        --------------------------------------------- */
+           --------------------------------------------- */
 
-        socket.to(rideCode).emit(
-          'userJoined',
-          {
-            userName,
+        socket
+          .to(rideCode)
+          .emit(
+            'userJoined',
+            {
+              memberId:
+                finalMemberId,
 
-            role: validRole,
+              userName,
 
-            rideCode,
-          }
-        );
+              role:
+                validRole,
+
+              rideCode,
+            }
+          );
+
 
       } catch (error) {
+
         console.error(
           'RYDO: joinRide error'
         );
@@ -197,30 +266,38 @@ function initializeRideSocket(io) {
               'Failed to join ride',
           }
         );
+
       }
+
     });
+
 
     /* =================================================
        LIVE LOCATION
-       
+
        Event:
        updateLocation
 
        Data:
        {
          rideCode: 'ABC123',
+         memberId: 'captain-john',
          userName: 'John',
          role: 'captain',
          latitude: 17.3850,
-         longitude: 78.4867
+         longitude: 78.4867,
+         updatedAt: '2026-08-20T...'
        }
-    ================================================= */
+       ================================================= */
 
     socket.on(
       'updateLocation',
       (data) => {
+
         try {
+
           if (!data) {
+
             console.log(
               'RYDO: Empty location data'
             );
@@ -228,9 +305,10 @@ function initializeRideSocket(io) {
             return;
           }
 
+
           /* -------------------------------------------
              DATA
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           const rideCode =
             String(
@@ -246,7 +324,8 @@ function initializeRideSocket(io) {
               data.userName ||
               socket.userName ||
               ''
-            ).trim();
+            )
+              .trim();
 
           const role =
             String(
@@ -257,21 +336,27 @@ function initializeRideSocket(io) {
               .toLowerCase()
               .trim();
 
+          const memberId =
+            String(
+              data.memberId ||
+              socket.memberId ||
+              ''
+            )
+              .trim();
+
           const latitude =
-            Number(
-              data.latitude
-            );
+            Number(data.latitude);
 
           const longitude =
-            Number(
-              data.longitude
-            );
+            Number(data.longitude);
+
 
           /* -------------------------------------------
              VALIDATION
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           if (!rideCode) {
+
             socket.emit(
               'socketError',
               {
@@ -283,7 +368,9 @@ function initializeRideSocket(io) {
             return;
           }
 
+
           if (!userName) {
+
             socket.emit(
               'socketError',
               {
@@ -295,14 +382,26 @@ function initializeRideSocket(io) {
             return;
           }
 
+
+          if (!memberId) {
+
+            socket.emit(
+              'socketError',
+              {
+                message:
+                  'Member ID is required',
+              }
+            );
+
+            return;
+          }
+
+
           if (
-            !Number.isFinite(
-              latitude
-            ) ||
-            !Number.isFinite(
-              longitude
-            )
+            !Number.isFinite(latitude) ||
+            !Number.isFinite(longitude)
           ) {
+
             socket.emit(
               'socketError',
               {
@@ -314,9 +413,10 @@ function initializeRideSocket(io) {
             return;
           }
 
+
           /* -------------------------------------------
              VALIDATE COORDINATE RANGE
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           if (
             latitude < -90 ||
@@ -324,6 +424,7 @@ function initializeRideSocket(io) {
             longitude < -180 ||
             longitude > 180
           ) {
+
             socket.emit(
               'socketError',
               {
@@ -335,22 +436,27 @@ function initializeRideSocket(io) {
             return;
           }
 
+
           /* -------------------------------------------
              NORMALIZE ROLE
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           const validRole =
             role === 'captain'
               ? 'captain'
               : 'rider';
 
+
           /* -------------------------------------------
              MAKE LOCATION OBJECT
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           const locationData = {
+
             socketId:
               socket.id,
+
+            memberId,
 
             rideCode,
 
@@ -363,16 +469,29 @@ function initializeRideSocket(io) {
 
             longitude,
 
-            timestamp:
+            updatedAt:
+              data.updatedAt ||
               new Date().toISOString(),
+
           };
+
 
           /* -------------------------------------------
              LOG LOCATION
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           console.log(
             'RYDO: LIVE LOCATION'
+          );
+
+          console.log(
+            'Socket:',
+            socket.id
+          );
+
+          console.log(
+            'Member:',
+            memberId
           );
 
           console.log(
@@ -400,23 +519,22 @@ function initializeRideSocket(io) {
             longitude
           );
 
+
           /* -------------------------------------------
              BROADCAST TO EVERYONE IN RIDE
-             
-             IMPORTANT:
-             socket.to() sends to everyone
-             EXCEPT the sender.
-             
-             We use io.to() so the sender
-             also receives the location.
-          ------------------------------------------- */
 
-          io.to(rideCode).emit(
-            'locationUpdated',
-            locationData
-          );
+             io.to() includes the sender.
+             ------------------------------------------- */
+
+          io
+            .to(rideCode)
+            .emit(
+              'locationUpdated',
+              locationData
+            );
 
         } catch (error) {
+
           console.error(
             'RYDO: updateLocation error'
           );
@@ -430,22 +548,31 @@ function initializeRideSocket(io) {
                 'Failed to update location',
             }
           );
+
         }
+
       }
     );
 
+
     /* =================================================
        REQUEST CURRENT SOCKET INFO
-    ================================================= */
+       ================================================= */
 
     socket.on(
       'getSocketInfo',
       () => {
+
         socket.emit(
           'socketInfo',
           {
+
             socketId:
               socket.id,
+
+            memberId:
+              socket.memberId ||
+              null,
 
             rideCode:
               socket.rideCode ||
@@ -458,19 +585,24 @@ function initializeRideSocket(io) {
             role:
               socket.role ||
               null,
+
           }
         );
+
       }
     );
 
+
     /* =================================================
        LEAVE RIDE
-    ================================================= */
+       ================================================= */
 
     socket.on(
       'leaveRide',
       () => {
+
         try {
+
           const rideCode =
             socket.rideCode;
 
@@ -480,12 +612,27 @@ function initializeRideSocket(io) {
           const role =
             socket.role;
 
+          const memberId =
+            socket.memberId;
+
+
           if (!rideCode) {
             return;
           }
 
+
           console.log(
             'RYDO: USER LEAVING RIDE'
+          );
+
+          console.log(
+            'Socket:',
+            socket.id
+          );
+
+          console.log(
+            'Member:',
+            memberId
           );
 
           console.log(
@@ -503,37 +650,49 @@ function initializeRideSocket(io) {
             role
           );
 
+
           /* -------------------------------------------
              INFORM OTHER USERS
-          ------------------------------------------- */
+             ------------------------------------------- */
 
-          socket.to(rideCode).emit(
-            'userLeft',
-            {
-              socketId:
-                socket.id,
+          socket
+            .to(rideCode)
+            .emit(
+              'userLeft',
+              {
 
-              rideCode,
+                socketId:
+                  socket.id,
 
-              userName,
+                memberId,
 
-              role,
-            }
-          );
+                rideCode,
+
+                userName,
+
+                role,
+
+              }
+            );
+
 
           /* -------------------------------------------
              LEAVE ROOM
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           socket.leave(
             rideCode
           );
 
+
           /* -------------------------------------------
              CLEAR SOCKET DATA
-          ------------------------------------------- */
+             ------------------------------------------- */
 
           socket.rideCode =
+            null;
+
+          socket.memberId =
             null;
 
           socket.userName =
@@ -542,23 +701,29 @@ function initializeRideSocket(io) {
           socket.role =
             null;
 
+
         } catch (error) {
+
           console.error(
             'RYDO: leaveRide error'
           );
 
           console.error(error);
+
         }
+
       }
     );
 
+
     /* =================================================
        DISCONNECT
-    ================================================= */
+       ================================================= */
 
     socket.on(
       'disconnect',
       (reason) => {
+
         console.log('================================');
 
         console.log(
@@ -568,6 +733,12 @@ function initializeRideSocket(io) {
         console.log(
           'Socket ID:',
           socket.id
+        );
+
+        console.log(
+          'Member:',
+          socket.memberId ||
+          'Unknown'
         );
 
         console.log(
@@ -583,48 +754,67 @@ function initializeRideSocket(io) {
         );
 
         console.log(
+          'Role:',
+          socket.role ||
+          'Unknown'
+        );
+
+        console.log(
           'Reason:',
           reason
         );
 
         console.log('================================');
 
+
         /* -------------------------------------------
            INFORM RIDE MEMBERS
-        ------------------------------------------- */
+           ------------------------------------------- */
 
         if (socket.rideCode) {
-          socket.to(
-            socket.rideCode
-          ).emit(
-            'userDisconnected',
-            {
-              socketId:
-                socket.id,
 
-              rideCode:
-                socket.rideCode,
+          socket
+            .to(socket.rideCode)
+            .emit(
+              'userDisconnected',
+              {
 
-              userName:
-                socket.userName,
+                socketId:
+                  socket.id,
 
-              role:
-                socket.role,
-            }
-          );
+                memberId:
+                  socket.memberId,
+
+                rideCode:
+                  socket.rideCode,
+
+                userName:
+                  socket.userName,
+
+                role:
+                  socket.role,
+
+              }
+            );
+
         }
+
       }
     );
+
   });
+
 
   console.log(
     'RYDO: Socket.IO READY'
   );
+
 }
+
 
 /* =====================================================
    EXPORT
-===================================================== */
+   ===================================================== */
 
 module.exports =
   initializeRideSocket;
