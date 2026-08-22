@@ -1,5 +1,6 @@
 const express = require('express');
 const Ride = require('../models/Ride');
+const User = require('../models/User');
 
 const router = express.Router();
 
@@ -1591,6 +1592,310 @@ router.get(
     }
   }
 );
+
+/* =====================================================
+   SOS ALERT
+
+   POST /api/rides/:rideCode/sos
+
+   Body:
+   {
+     riderName: 'Alice',
+     riderId: 'mongodb-rider-id',   (optional)
+     latitude: 17.3850,
+     longitude: 78.4867
+   }
+===================================================== */
+
+router.post(
+  '/:rideCode/sos',
+  async (req, res) => {
+    try {
+      const rideCode =
+        String(
+          req.params.rideCode
+        )
+          .toUpperCase()
+          .trim();
+
+      const {
+        riderName,
+        riderId,
+        userId,
+        latitude,
+        longitude,
+      } = req.body;
+
+      /* -------------------------------------------
+         VALIDATE
+      ------------------------------------------- */
+
+      if (!riderName) {
+        return res.status(400).json({
+          success: false,
+
+          message:
+            'Rider name is required for SOS',
+        });
+      }
+
+      const lat =
+        Number(latitude);
+
+      const lng =
+        Number(longitude);
+
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lng)
+      ) {
+        return res.status(400).json({
+          success: false,
+
+          message:
+            'Valid latitude and longitude are required for SOS',
+        });
+      }
+
+      /* -------------------------------------------
+         FIND RIDE
+      ------------------------------------------- */
+
+      const ride =
+        await Ride.findOne({
+          rideCode,
+        });
+
+      if (!ride) {
+        return res.status(404).json({
+          success: false,
+
+          message:
+            'Ride not found',
+        });
+      }
+
+      /* -------------------------------------------
+         SECURELY RETRIEVE USER PROFILE (FROM DB)
+      ------------------------------------------- */
+
+      let userProfile = null;
+
+      if (userId && userId.match(/^[0-9a-fA-F]{24}$/)) {
+        userProfile = await User.findById(userId);
+      }
+
+      if (!userProfile && riderName) {
+        userProfile = await User.findOne({
+          name: new RegExp(`^${riderName.trim()}$`, 'i'),
+        });
+      }
+
+      const bikeNumber = userProfile?.bikeNumber || null;
+      const bloodGroup = userProfile?.bloodGroup || null;
+      const emergencyContact = userProfile?.emergencyContact
+        ? {
+            name: userProfile.emergencyContact.name,
+            phoneNumber: userProfile.emergencyContact.phoneNumber,
+          }
+        : { name: null, phoneNumber: null };
+
+      /* -------------------------------------------
+         SAVE SOS EVENT
+      ------------------------------------------- */
+
+      const sosEvent = {
+        riderName:
+          String(riderName).trim(),
+
+        riderId:
+          riderId || null,
+
+        userId:
+          userProfile ? String(userProfile._id) : (userId || null),
+
+        bikeNumber,
+
+        bloodGroup,
+
+        emergencyContact,
+
+        status:
+          'active',
+
+        latitude: lat,
+
+        longitude: lng,
+
+        triggeredAt:
+          new Date(),
+      };
+
+      ride.sosEvents.push(sosEvent);
+
+      await ride.save();
+
+      /* -------------------------------------------
+         BROADCAST VIA SOCKET
+      ------------------------------------------- */
+
+      const savedEvent =
+        ride.sosEvents[
+          ride.sosEvents.length - 1
+        ];
+
+      const io =
+        req.app.get('io');
+
+      if (io) {
+        io
+          .to(rideCode)
+          .emit(
+            'sosAlert',
+            {
+              rideCode,
+
+              riderName:
+                sosEvent.riderName,
+
+              riderId:
+                sosEvent.riderId,
+
+              userId:
+                sosEvent.userId,
+
+              bikeNumber:
+                sosEvent.bikeNumber,
+
+              bloodGroup:
+                sosEvent.bloodGroup,
+
+              emergencyContact: {
+                name: sosEvent.emergencyContact?.name || null,
+                phoneNumber: sosEvent.emergencyContact?.phoneNumber || null,
+              },
+
+              latitude:
+                sosEvent.latitude,
+
+              longitude:
+                sosEvent.longitude,
+
+              triggeredAt:
+                sosEvent.triggeredAt,
+
+              status:
+                sosEvent.status,
+
+              sosId:
+                savedEvent._id,
+            }
+          );
+
+        console.log(
+          'RYDO: SOS BROADCAST TO RIDE:',
+          rideCode
+        );
+      }
+
+      /* -------------------------------------------
+         LOG
+      ------------------------------------------- */
+
+      console.log(
+        '================================'
+      );
+
+      console.log(
+        'RYDO: SOS RECEIVED & EMERGENCY ALERT DISPATCHED'
+      );
+
+      console.log(
+        'Ride:',
+        rideCode
+      );
+
+      console.log(
+        'Rider:',
+        sosEvent.riderName
+      );
+
+      if (bikeNumber) {
+        console.log('Bike Number:', bikeNumber);
+      }
+
+      if (bloodGroup) {
+        console.log('Blood Group:', bloodGroup);
+      }
+
+      if (emergencyContact?.name) {
+        console.log('Emergency Contact:', emergencyContact.name, `(${emergencyContact.phoneNumber})`);
+      }
+
+      console.log(
+        'Latitude:',
+        sosEvent.latitude
+      );
+
+      console.log(
+        'Longitude:',
+        sosEvent.longitude
+      );
+
+      console.log(
+        '================================'
+      );
+
+      return res.json({
+        success: true,
+
+        message:
+          'SOS sent successfully. Emergency contact and crew alerted.',
+
+        sos: {
+          id:
+            savedEvent._id,
+
+          riderName:
+            sosEvent.riderName,
+
+          bikeNumber:
+            sosEvent.bikeNumber,
+
+          bloodGroup:
+            sosEvent.bloodGroup,
+
+          emergencyContact:
+            sosEvent.emergencyContact,
+
+          latitude:
+            sosEvent.latitude,
+
+          longitude:
+            sosEvent.longitude,
+
+          triggeredAt:
+            sosEvent.triggeredAt,
+        },
+      });
+
+    } catch (error) {
+      console.error(
+        'RYDO: SOS error'
+      );
+
+      console.error(error);
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          'Failed to send SOS',
+      });
+    }
+  }
+);
+
 
 /* =====================================================
    EXPORT

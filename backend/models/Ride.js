@@ -1,1592 +1,413 @@
-const express = require('express');
-const Ride = require('../models/Ride');
-
-const router = express.Router();
+const mongoose = require('mongoose');
 
 /* =====================================================
-   GENERATE RIDE CODE
+   LOCATION SCHEMA
 ===================================================== */
 
-function generateRideCode() {
-  const characters =
-    'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-  let code = '';
-
-  for (let i = 0; i < 6; i++) {
-    code += characters.charAt(
-      Math.floor(
-        Math.random() * characters.length
-      )
-    );
-  }
-
-  return code;
-}
-
-/* =====================================================
-   OPENSTREETMAP GEOCODING
-===================================================== */
-
-async function geocodeLocation(locationName) {
-  const query = String(locationName).trim();
-
-  if (!query) {
-    throw new Error(
-      'Location name is empty'
-    );
-  }
-
-  const url =
-    'https://nominatim.openstreetmap.org/search' +
-    '?format=json' +
-    '&limit=1' +
-    '&q=' +
-    encodeURIComponent(query);
-
-  console.log(
-    'RYDO: Geocoding:',
-    query
-  );
-
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'RYDO-Mobile-App/1.0',
-
-      'Accept':
-        'application/json',
+const locationSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
     },
-  });
 
-  if (!response.ok) {
-    throw new Error(
-      `OpenStreetMap geocoding failed: ${response.status}`
-    );
-  }
-
-  const data =
-    await response.json();
-
-  if (
-    !Array.isArray(data) ||
-    data.length === 0
-  ) {
-    throw new Error(
-      `Location not found: ${query}`
-    );
-  }
-
-  const result = data[0];
-
-  const latitude =
-    Number(result.lat);
-
-  const longitude =
-    Number(result.lon);
-
-  if (
-    !Number.isFinite(latitude) ||
-    !Number.isFinite(longitude)
-  ) {
-    throw new Error(
-      `Invalid coordinates returned for: ${query}`
-    );
-  }
-
-  return {
-    name: query,
-
-    latitude,
-
-    longitude,
-  };
-}
-
-/* =====================================================
-   OSRM ROAD ROUTING
-===================================================== */
-
-async function getRoadRoute(locations) {
-  if (
-    !Array.isArray(locations) ||
-    locations.length < 2
-  ) {
-    throw new Error(
-      'At least two locations are required for routing'
-    );
-  }
-
-  const coordinates =
-    locations
-      .map(
-        (location) =>
-          `${location.longitude},${location.latitude}`
-      )
-      .join(';');
-
-  const url =
-    `https://router.project-osrm.org/route/v1/driving/${coordinates}` +
-    '?overview=full' +
-    '&geometries=geojson' +
-    '&steps=true';
-
-  console.log(
-    '================================'
-  );
-
-  console.log(
-    'RYDO: REQUESTING ROAD ROUTE'
-  );
-
-  console.log(
-    'OSRM URL:',
-    url
-  );
-
-  console.log(
-    '================================'
-  );
-
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'RYDO-Mobile-App/1.0',
-
-      'Accept':
-        'application/json',
+    latitude: {
+      type: Number,
+      required: true,
     },
-  });
 
-  if (!response.ok) {
-    throw new Error(
-      `OSRM routing failed: ${response.status}`
-    );
-  }
-
-  const data =
-    await response.json();
-
-  if (
-    data.code !== 'Ok' ||
-    !data.routes ||
-    data.routes.length === 0
-  ) {
-    throw new Error(
-      'OSRM could not find a road route'
-    );
-  }
-
-  const route =
-    data.routes[0];
-
-  const coordinatesForAndroid =
-    route.geometry.coordinates.map(
-      (coordinate) => ({
-        latitude:
-          Number(coordinate[1]),
-
-        longitude:
-          Number(coordinate[0]),
-      })
-    );
-
-  return {
-    distanceMeters:
-      route.distance,
-
-    durationSeconds:
-      route.duration,
-
-    distanceKm:
-      Number(
-        (
-          route.distance / 1000
-        ).toFixed(2)
-      ),
-
-    durationMinutes:
-      Number(
-        (
-          route.duration / 60
-        ).toFixed(1)
-      ),
-
-    coordinates:
-      coordinatesForAndroid,
-  };
-}
-
-/* =====================================================
-   CREATE RIDE
-
-   POST /api/rides
-===================================================== */
-
-router.post(
-  '/',
-  async (req, res) => {
-    try {
-      const {
-        rideName,
-        captainName,
-      } = req.body;
-
-      if (
-        !rideName ||
-        !captainName
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Ride name and captain name are required',
-        });
-      }
-
-      const cleanRideName =
-        String(
-          rideName
-        ).trim();
-
-      const cleanCaptainName =
-        String(
-          captainName
-        ).trim();
-
-      if (
-        !cleanRideName ||
-        !cleanCaptainName
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Ride name and captain name cannot be empty',
-        });
-      }
-
-      let rideCode;
-      let existingRide;
-
-      do {
-        rideCode =
-          generateRideCode();
-
-        existingRide =
-          await Ride.findOne({
-            rideCode,
-          });
-      } while (existingRide);
-
-      const ride =
-        await Ride.create({
-          rideCode,
-
-          rideName:
-            cleanRideName,
-
-          captainName:
-            cleanCaptainName,
-
-          status:
-            'ready',
-
-          isStarted:
-            false,
-
-          riders: [],
-
-          captainLocation:
-            null,
-
-          route: {
-            start: null,
-
-            stops: [],
-
-            destination: null,
-
-            coordinates: [],
-
-            distanceMeters: 0,
-
-            durationSeconds: 0,
-
-            distanceKm: 0,
-
-            durationMinutes: 0,
-          },
-        });
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: RIDE CREATED'
-      );
-
-      console.log(
-        'Ride Code:',
-        ride.rideCode
-      );
-
-      console.log(
-        'Ride Name:',
-        ride.rideName
-      );
-
-      console.log(
-        'Captain:',
-        ride.captainName
-      );
-
-      console.log(
-        '================================'
-      );
-
-      return res.status(201).json({
-        success: true,
-
-        message:
-          'Ride created successfully',
-
-        ride: {
-          id:
-            ride._id,
-
-          rideCode:
-            ride.rideCode,
-
-          rideName:
-            ride.rideName,
-
-          captainName:
-            ride.captainName,
-
-          riders:
-            ride.riders,
-
-          isStarted:
-            ride.isStarted,
-
-          status:
-            ride.status,
-
-          captainLocation:
-            ride.captainLocation,
-
-          route:
-            ride.route,
-        },
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Create ride error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to create ride',
-      });
-    }
+    longitude: {
+      type: Number,
+      required: true,
+    },
+  },
+  {
+    _id: false,
   }
 );
 
 /* =====================================================
-   JOIN RIDE
-
-   POST /api/rides/join
+   LIVE LOCATION SCHEMA
 ===================================================== */
 
-router.post(
-  '/join',
-  async (req, res) => {
-    try {
-      const {
-        rideCode,
-        riderName,
-      } = req.body;
+const liveLocationSchema = new mongoose.Schema(
+  {
+    latitude: {
+      type: Number,
+      default: null,
+    },
 
-      if (
-        !rideCode ||
-        !riderName
-      ) {
-        return res.status(400).json({
-          success: false,
+    longitude: {
+      type: Number,
+      default: null,
+    },
 
-          message:
-            'Ride code and rider name are required',
-        });
-      }
-
-      const code =
-        String(
-          rideCode
-        )
-          .toUpperCase()
-          .trim();
-
-      const name =
-        String(
-          riderName
-        ).trim();
-
-      if (!name) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Rider name cannot be empty',
-        });
-      }
-
-      const ride =
-        await Ride.findOne({
-          rideCode: code,
-        });
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found. Check the ride code.',
-        });
-      }
-
-      const alreadyJoined =
-        ride.riders.some(
-          (rider) =>
-            rider.name
-              .toLowerCase() ===
-            name.toLowerCase()
-        );
-
-      if (!alreadyJoined) {
-        ride.riders.push({
-          name,
-
-          location:
-            null,
-        });
-
-        await ride.save();
-      }
-
-      console.log(
-        `RYDO: ${name} joined ride ${ride.rideCode}`
-      );
-
-      return res.json({
-        success: true,
-
-        message:
-          'Joined ride successfully',
-
-        ride: {
-          id:
-            ride._id,
-
-          rideCode:
-            ride.rideCode,
-
-          rideName:
-            ride.rideName,
-
-          captainName:
-            ride.captainName,
-
-          riders:
-            ride.riders,
-
-          isStarted:
-            ride.isStarted,
-
-          status:
-            ride.status,
-
-          captainLocation:
-            ride.captainLocation,
-
-          route:
-            ride.route,
-        },
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Join ride error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to join ride',
-      });
-    }
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
   }
 );
 
 /* =====================================================
-   GET RIDE
-
-   GET /api/rides/:rideCode
+   CAPTAIN LOCATION SCHEMA
 ===================================================== */
 
-router.get(
-  '/:rideCode',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
+const captainLocationSchema = new mongoose.Schema(
+  {
+    latitude: {
+      type: Number,
+      default: null,
+    },
 
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
+    longitude: {
+      type: Number,
+      default: null,
+    },
 
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      return res.json({
-        success: true,
-
-        ride,
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Get ride error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to get ride',
-      });
-    }
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
   }
 );
 
 /* =====================================================
-   START / END RIDE
-
-   PATCH /api/rides/:rideCode/status
+   RIDER SCHEMA
 ===================================================== */
 
-router.patch(
-  '/:rideCode/status',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
+const riderSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
 
-      const {
-        isStarted,
-      } = req.body;
+    joinedAt: {
+      type: Date,
+      default: Date.now,
+    },
 
-      const started =
-        Boolean(isStarted);
+    /* -----------------------------------------------
+       RIDER LIVE GPS LOCATION
+    ----------------------------------------------- */
 
-      const status =
-        started
-          ? 'live'
-          : 'ended';
+    location: {
+      type: liveLocationSchema,
+      default: null,
+    },
+  },
+  {
+    _id: true,
+  }
+);
 
-      const ride =
-        await Ride.findOneAndUpdate(
+/* =====================================================
+   ROAD ROUTE SCHEMA
+===================================================== */
+
+const routeSchema = new mongoose.Schema(
+  {
+    /* -----------------------------------------------
+       START LOCATION
+    ----------------------------------------------- */
+
+    start: {
+      type: locationSchema,
+      default: null,
+    },
+
+    /* -----------------------------------------------
+       STOPS
+    ----------------------------------------------- */
+
+    stops: {
+      type: [locationSchema],
+      default: [],
+    },
+
+    /* -----------------------------------------------
+       DESTINATION
+    ----------------------------------------------- */
+
+    destination: {
+      type: locationSchema,
+      default: null,
+    },
+
+    /* -----------------------------------------------
+       ACTUAL ROAD ROUTE COORDINATES
+
+       These coordinates come from OSRM.
+
+       Each point:
+       {
+         latitude,
+         longitude
+       }
+    ----------------------------------------------- */
+
+    coordinates: {
+      type: [
+        new mongoose.Schema(
           {
-            rideCode,
-          },
+            latitude: {
+              type: Number,
+              required: true,
+            },
 
-          {
-            $set: {
-              isStarted:
-                started,
-
-              status,
+            longitude: {
+              type: Number,
+              required: true,
             },
           },
-
           {
-            new: true,
+            _id: false,
           }
-        );
+        ),
+      ],
 
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
+      default: [],
+    },
 
-          message:
-            'Ride not found',
-        });
-      }
+    /* -----------------------------------------------
+       ROUTE DISTANCE
+    ----------------------------------------------- */
 
-      return res.json({
-        success: true,
+    distanceMeters: {
+      type: Number,
+      default: 0,
+    },
 
-        message:
-          ride.isStarted
-            ? 'Ride started'
-            : 'Ride ended',
+    distanceKm: {
+      type: Number,
+      default: 0,
+    },
 
-        ride,
-      });
+    /* -----------------------------------------------
+       ROUTE DURATION
+    ----------------------------------------------- */
 
-    } catch (error) {
-      console.error(
-        'RYDO: Ride status error'
-      );
+    durationSeconds: {
+      type: Number,
+      default: 0,
+    },
 
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to update ride status',
-      });
-    }
+    durationMinutes: {
+      type: Number,
+      default: 0,
+    },
+  },
+  {
+    _id: false,
   }
 );
 
 /* =====================================================
-   UPDATE ROUTE
-
-   PATCH /api/rides/:rideCode/route
+   SOS EVENT SCHEMA
 ===================================================== */
 
-router.patch(
-  '/:rideCode/route',
-  async (req, res) => {
-    try {
-      console.log(
-        '================================'
-      );
+const sosEventSchema = new mongoose.Schema(
+  {
+    riderName: {
+      type: String,
+      default: 'Unknown Rider',
+      trim: true,
+    },
 
-      console.log(
-        'RYDO: ROUTE UPDATE REQUEST'
-      );
+    riderId: {
+      type: String,
+      default: null,
+    },
 
-      console.log(
-        'Ride Code:',
-        req.params.rideCode
-      );
+    userId: {
+      type: String,
+      default: null,
+    },
 
-      console.log(
-        'Request Body:',
-        req.body
-      );
+    bikeNumber: {
+      type: String,
+      default: null,
+    },
 
-      console.log(
-        '================================'
-      );
+    bloodGroup: {
+      type: String,
+      default: null,
+    },
 
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
+    emergencyContact: {
+      name: {
+        type: String,
+        default: null,
+      },
+      phoneNumber: {
+        type: String,
+        default: null,
+      },
+    },
 
-      const {
-        start,
-        destination,
-        stops,
-      } = req.body;
+    status: {
+      type: String,
+      enum: ['active', 'resolved'],
+      default: 'active',
+    },
 
-      if (
-        !start ||
-        !String(start).trim()
-      ) {
-        return res.status(400).json({
-          success: false,
+    latitude: {
+      type: Number,
+      default: null,
+    },
 
-          message:
-            'Start location is required',
-        });
-      }
+    longitude: {
+      type: Number,
+      default: null,
+    },
 
-      if (
-        !destination ||
-        !String(destination).trim()
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Destination is required',
-        });
-      }
-
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      const cleanStops =
-        Array.isArray(stops)
-          ? stops
-              .map(
-                (stop) =>
-                  String(stop).trim()
-              )
-              .filter(
-                (stop) =>
-                  stop.length > 0
-              )
-          : [];
-
-      console.log(
-        'RYDO: Geocoding start...'
-      );
-
-      const startLocation =
-        await geocodeLocation(
-          start
-        );
-
-      const stopLocations = [];
-
-      for (
-        let i = 0;
-        i < cleanStops.length;
-        i++
-      ) {
-        console.log(
-          `RYDO: Geocoding stop ${i + 1}:`,
-          cleanStops[i]
-        );
-
-        const stopLocation =
-          await geocodeLocation(
-            cleanStops[i]
-          );
-
-        stopLocations.push(
-          stopLocation
-        );
-
-        await new Promise(
-          (resolve) =>
-            setTimeout(
-              resolve,
-              1000
-            )
-        );
-      }
-
-      console.log(
-        'RYDO: Geocoding destination...'
-      );
-
-      const destinationLocation =
-        await geocodeLocation(
-          destination
-        );
-
-      const allLocations = [
-        startLocation,
-
-        ...stopLocations,
-
-        destinationLocation,
-      ];
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: LOCATIONS FOR ROUTING'
-      );
-
-      allLocations.forEach(
-        (
-          location,
-          index
-        ) => {
-          console.log(
-            `${index + 1}. ${location.name}`
-          );
-
-          console.log(
-            '   Latitude:',
-            location.latitude
-          );
-
-          console.log(
-            '   Longitude:',
-            location.longitude
-          );
-        }
-      );
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: Getting actual road route...'
-      );
-
-      const roadRoute =
-        await getRoadRoute(
-          allLocations
-        );
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: ROAD ROUTE RECEIVED'
-      );
-
-      console.log(
-        'Distance:',
-        roadRoute.distanceKm,
-        'km'
-      );
-
-      console.log(
-        'Duration:',
-        roadRoute.durationMinutes,
-        'minutes'
-      );
-
-      console.log(
-        'Route points:',
-        roadRoute.coordinates.length
-      );
-
-      console.log(
-        '================================'
-      );
-
-      ride.route = {
-        start:
-          startLocation,
-
-        stops:
-          stopLocations,
-
-        destination:
-          destinationLocation,
-
-        coordinates:
-          roadRoute.coordinates,
-
-        distanceMeters:
-          roadRoute.distanceMeters,
-
-        durationSeconds:
-          roadRoute.durationSeconds,
-
-        distanceKm:
-          roadRoute.distanceKm,
-
-        durationMinutes:
-          roadRoute.durationMinutes,
-      };
-
-      await ride.save();
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: ROUTE SAVED SUCCESSFULLY'
-      );
-
-      console.log(
-        'Ride Code:',
-        ride.rideCode
-      );
-
-      console.log(
-        'Route Points:',
-        ride.route.coordinates.length
-      );
-
-      console.log(
-        '================================'
-      );
-
-      return res.json({
-        success: true,
-
-        message:
-          'Road route generated successfully',
-
-        ride,
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Route update error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          error.message ||
-          'Failed to generate road route',
-      });
-    }
+    triggeredAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  {
+    _id: true,
   }
 );
 
 /* =====================================================
-   REMOVE RIDER
-
-   DELETE /api/rides/:rideCode/riders/:riderId
+   RIDE SCHEMA
 ===================================================== */
 
-router.delete(
-  '/:rideCode/riders/:riderId',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
+const rideSchema = new mongoose.Schema(
+  {
+    /* =================================================
+       RIDE INFORMATION
+    ================================================= */
 
-      const riderId =
-        req.params.riderId;
+    rideCode: {
+      type: String,
 
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
+      required: true,
 
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
+      unique: true,
 
-          message:
-            'Ride not found',
-        });
-      }
+      uppercase: true,
 
-      const rider =
-        ride.riders.id(
-          riderId
-        );
+      trim: true,
+    },
 
-      if (!rider) {
-        return res.status(404).json({
-          success: false,
+    rideName: {
+      type: String,
 
-          message:
-            'Rider not found',
-        });
-      }
+      required: true,
 
-      const riderName =
-        rider.name;
+      trim: true,
+    },
 
-      rider.deleteOne();
+    captainName: {
+      type: String,
 
-      await ride.save();
+      required: true,
 
-      console.log(
-        `RYDO: Rider ${riderName} removed from ${ride.rideCode}`
-      );
+      trim: true,
+    },
 
-      return res.json({
-        success: true,
+    /* =================================================
+       RIDE STATUS
+    ================================================= */
 
-        message:
-          'Rider removed successfully',
+    status: {
+      type: String,
 
-        ride,
-      });
+      enum: [
+        'ready',
+        'live',
+        'ended',
+      ],
 
-    } catch (error) {
-      console.error(
-        'RYDO: Remove rider error'
-      );
+      default: 'ready',
+    },
 
-      console.error(error);
+    isStarted: {
+      type: Boolean,
 
-      return res.status(500).json({
-        success: false,
+      default: false,
+    },
 
-        message:
-          'Failed to remove rider',
-      });
-    }
+    /* =================================================
+       RIDERS
+    ================================================= */
+
+    riders: {
+      type: [riderSchema],
+
+      default: [],
+    },
+
+    /* =================================================
+       CAPTAIN LIVE LOCATION
+    ================================================= */
+
+    captainLocation: {
+      type: captainLocationSchema,
+
+      default: null,
+    },
+
+    /* =================================================
+       ROUTE
+    ================================================= */
+
+    route: {
+      type: routeSchema,
+
+      default: () => ({
+        start: null,
+
+        stops: [],
+
+        destination: null,
+
+        coordinates: [],
+
+        distanceMeters: 0,
+
+        distanceKm: 0,
+
+        durationSeconds: 0,
+
+        durationMinutes: 0,
+      }),
+    },
+
+    /* =================================================
+       SOS EVENTS
+    ================================================= */
+
+    sosEvents: {
+      type: [sosEventSchema],
+
+      default: [],
+    },
+  },
+
+  {
+    timestamps: true,
   }
 );
 
 /* =====================================================
-   LEAVE RIDE
-
-   POST /api/rides/:rideCode/leave
+   MODEL
 ===================================================== */
 
-router.post(
-  '/:rideCode/leave',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
-
-      const {
-        riderName,
-      } = req.body;
-
-      if (!riderName) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Rider name is required',
-        });
-      }
-
-      const name =
-        String(
-          riderName
-        ).trim();
-
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      const originalLength =
-        ride.riders.length;
-
-      ride.riders =
-        ride.riders.filter(
-          (rider) =>
-            rider.name
-              .toLowerCase() !==
-            name.toLowerCase()
-        );
-
-      if (
-        ride.riders.length ===
-        originalLength
-      ) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Rider is not a member of this ride',
-        });
-      }
-
-      await ride.save();
-
-      console.log(
-        `RYDO: ${name} left ride ${ride.rideCode}`
-      );
-
-      return res.json({
-        success: true,
-
-        message:
-          'Left ride successfully',
-
-        ride,
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Leave ride error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to leave ride',
-      });
-    }
-  }
-);
-
-/* =====================================================
-   UPDATE CAPTAIN LOCATION
-
-   PATCH /api/rides/:rideCode/captain-location
-===================================================== */
-
-router.patch(
-  '/:rideCode/captain-location',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
-
-      const {
-        latitude,
-        longitude,
-      } = req.body;
-
-      const lat =
-        Number(latitude);
-
-      const lng =
-        Number(longitude);
-
-      if (
-        !Number.isFinite(lat) ||
-        !Number.isFinite(lng)
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Valid latitude and longitude are required',
-        });
-      }
-
-      if (
-        lat < -90 ||
-        lat > 90
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Invalid latitude',
-        });
-      }
-
-      if (
-        lng < -180 ||
-        lng > 180
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Invalid longitude',
-        });
-      }
-
-      const ride =
-        await Ride.findOneAndUpdate(
-          {
-            rideCode,
-          },
-
-          {
-            $set: {
-              captainLocation: {
-                latitude: lat,
-
-                longitude: lng,
-
-                updatedAt:
-                  new Date(),
-              },
-            },
-          },
-
-          {
-            new: true,
-          }
-        );
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      return res.json({
-        success: true,
-
-        message:
-          'Captain location updated',
-
-        captainLocation:
-          ride.captainLocation,
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Captain location error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to update captain location',
-      });
-    }
-  }
-);
-
-/* =====================================================
-   UPDATE RIDER LIVE LOCATION
-
-   PATCH /api/rides/:rideCode/riders/:riderId/location
-===================================================== */
-
-router.patch(
-  '/:rideCode/riders/:riderId/location',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
-
-      const riderId =
-        req.params.riderId;
-
-      const {
-        latitude,
-        longitude,
-      } = req.body;
-
-      const lat =
-        Number(latitude);
-
-      const lng =
-        Number(longitude);
-
-      /* -----------------------------------------------
-         VALIDATE GPS
-      ----------------------------------------------- */
-
-      if (
-        !Number.isFinite(lat) ||
-        !Number.isFinite(lng)
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Valid latitude and longitude are required',
-        });
-      }
-
-      if (
-        lat < -90 ||
-        lat > 90
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Invalid latitude',
-        });
-      }
-
-      if (
-        lng < -180 ||
-        lng > 180
-      ) {
-        return res.status(400).json({
-          success: false,
-
-          message:
-            'Invalid longitude',
-        });
-      }
-
-      /* -----------------------------------------------
-         FIND RIDE
-      ----------------------------------------------- */
-
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      /* -----------------------------------------------
-         FIND RIDER
-      ----------------------------------------------- */
-
-      const rider =
-        ride.riders.id(
-          riderId
-        );
-
-      if (!rider) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Rider not found in this ride',
-        });
-      }
-
-      /* -----------------------------------------------
-         UPDATE LOCATION
-      ----------------------------------------------- */
-
-      rider.location = {
-        latitude: lat,
-
-        longitude: lng,
-
-        updatedAt:
-          new Date(),
-      };
-
-      await ride.save();
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: RIDER LOCATION UPDATED'
-      );
-
-      console.log(
-        'Ride Code:',
-        rideCode
-      );
-
-      console.log(
-        'Rider:',
-        rider.name
-      );
-
-      console.log(
-        'Latitude:',
-        lat
-      );
-
-      console.log(
-        'Longitude:',
-        lng
-      );
-
-      console.log(
-        '================================'
-      );
-
-      return res.json({
-        success: true,
-
-        message:
-          'Rider location updated',
-
-        rider: {
-          id:
-            rider._id,
-
-          name:
-            rider.name,
-
-          location:
-            rider.location,
-        },
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Rider location error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to update rider location',
-      });
-    }
-  }
-);
-
-/* =====================================================
-   GET ALL LIVE LOCATIONS
-
-   GET /api/rides/:rideCode/locations
-
-   Returns:
-   - Captain location
-   - Every rider location
-===================================================== */
-
-router.get(
-  '/:rideCode/locations',
-  async (req, res) => {
-    try {
-      const rideCode =
-        String(
-          req.params.rideCode
-        )
-          .toUpperCase()
-          .trim();
-
-      const ride =
-        await Ride.findOne({
-          rideCode,
-        });
-
-      if (!ride) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Ride not found',
-        });
-      }
-
-      const riders =
-        ride.riders
-          .filter(
-            (rider) =>
-              rider.location &&
-              Number.isFinite(
-                Number(
-                  rider.location.latitude
-                )
-              ) &&
-              Number.isFinite(
-                Number(
-                  rider.location.longitude
-                )
-              )
-          )
-          .map(
-            (rider) => ({
-              id:
-                rider._id,
-
-              name:
-                rider.name,
-
-              location:
-                rider.location,
-            })
-          );
-
-      return res.json({
-        success: true,
-
-        rideCode:
-          ride.rideCode,
-
-        captain: {
-          name:
-            ride.captainName,
-
-          location:
-            ride.captainLocation,
-        },
-
-        riders,
-
-        totalLocations:
-          riders.length +
-          (
-            ride.captainLocation
-              ? 1
-              : 0
-          ),
-      });
-
-    } catch (error) {
-      console.error(
-        'RYDO: Get live locations error'
-      );
-
-      console.error(error);
-
-      return res.status(500).json({
-        success: false,
-
-        message:
-          'Failed to get live locations',
-      });
-    }
-  }
-);
-
-/* =====================================================
-   EXPORT
-===================================================== */
-
-module.exports = router;
+module.exports =
+  mongoose.model(
+    'Ride',
+    rideSchema
+  );

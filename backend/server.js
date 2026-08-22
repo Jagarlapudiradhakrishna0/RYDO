@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 require('dotenv').config();
 
 const rideRoutes = require('./routes/rideRoutes');
+const authRoutes = require('./routes/authRoutes');
 const initializeRideSocket = require('./socket/rideSocket');
 
 /* =====================================================
@@ -52,6 +53,12 @@ const io = new Server(server, {
 initializeRideSocket(io);
 
 /* =====================================================
+   REGISTER IO ON APP (accessible in routes)
+===================================================== */
+
+app.set('io', io);
+
+/* =====================================================
    MIDDLEWARE
 ===================================================== */
 
@@ -66,6 +73,12 @@ app.use(
       'PUT',
       'DELETE',
       'OPTIONS',
+    ],
+
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
     ],
   })
 );
@@ -166,6 +179,11 @@ app.get('/api/health', (req, res) => {
 ===================================================== */
 
 app.use(
+  '/api/auth',
+  authRoutes
+);
+
+app.use(
   '/api/rides',
   rideRoutes
 );
@@ -225,6 +243,64 @@ app.use(
 
 const PORT =
   process.env.PORT || 5000;
+
+console.log(
+  '================================'
+);
+console.log(
+  'RYDO: Starting backend...'
+);
+console.log(
+  `RYDO: Port: ${PORT}`
+);
+console.log(
+  '================================'
+);
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(
+      '================================================'
+    );
+    console.error(
+      'RYDO ERROR:'
+    );
+    console.error(
+      `Port ${PORT} is already in use.`
+    );
+    console.error(
+      'Another RYDO backend process may already be running.'
+    );
+    console.error(
+      ''
+    );
+    console.error(
+      'To check what process is using port ' + PORT + ', run:'
+    );
+    console.error(
+      `netstat -ano | findstr :${PORT}`
+    );
+    console.error(
+      ''
+    );
+    console.error(
+      'Then identify the process with:'
+    );
+    console.error(
+      'tasklist | findstr <PID>'
+    );
+    console.error(
+      '================================================'
+    );
+    process.exit(1);
+  } else {
+    console.error(
+      'RYDO: Server error:',
+      error
+    );
+    process.exit(1);
+  }
+});
 
 server.listen(
   PORT,

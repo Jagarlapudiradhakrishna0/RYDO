@@ -13,10 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
+import { getCurrentUser } from '@/constants/auth';
 
 export default function CreateRideScreen() {
+  const currentUser = getCurrentUser();
   const [rideName, setRideName] = useState('');
-  const [captainName, setCaptainName] = useState('');
+  const [captainName, setCaptainName] = useState(currentUser?.name || '');
   const [isCreating, setIsCreating] = useState(false);
 
   const createRide = async () => {

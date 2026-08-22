@@ -131,28 +131,35 @@ export default function WelcomeScreen() {
         </View>
 
         {/* =================================================
-            GET STARTED BUTTON
+            ACTION BUTTONS
            ================================================= */}
 
-        <TouchableOpacity
-          activeOpacity={0.85}
-          style={styles.button}
-          onPress={() => router.push('/ride-choice')}
-        >
+        <View style={styles.actionSection}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.button}
+            onPress={() => router.push('/login')}
+          >
+            <View style={styles.buttonContent}>
+              <Text style={styles.buttonText}>
+                LOGIN
+              </Text>
+              <Text style={styles.arrow}>
+                →
+              </Text>
+            </View>
+          </TouchableOpacity>
 
-          <View style={styles.buttonContent}>
-
-            <Text style={styles.buttonText}>
-              GET STARTED
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.secondaryButton}
+            onPress={() => router.push('/register')}
+          >
+            <Text style={styles.secondaryButtonText}>
+              CREATE ACCOUNT
             </Text>
-
-            <Text style={styles.arrow}>
-              →
-            </Text>
-
-          </View>
-
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
 
         {/* =================================================
             FOOTER
@@ -490,12 +497,17 @@ const styles = StyleSheet.create({
      BUTTON
      ------------------------------------------------------- */
 
+  actionSection: {
+    width: '100%',
+    gap: 12,
+  },
+
   button: {
     width: '100%',
 
-    height: 62,
+    height: 58,
 
-    borderRadius: 31,
+    borderRadius: 29,
 
     backgroundColor: '#FFFFFF',
 
@@ -530,7 +542,7 @@ const styles = StyleSheet.create({
   buttonText: {
     color: '#080808',
 
-    fontSize: 15,
+    fontSize: 14,
 
     fontWeight: '700',
 
@@ -540,11 +552,29 @@ const styles = StyleSheet.create({
   arrow: {
     color: '#080808',
 
-    fontSize: 29,
+    fontSize: 26,
 
     fontWeight: '300',
 
     marginTop: -2,
+  },
+
+  secondaryButton: {
+    width: '100%',
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#0E0E0E',
+    borderWidth: 1,
+    borderColor: '#2E2E2E',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  secondaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 2,
   },
 
   /* -------------------------------------------------------

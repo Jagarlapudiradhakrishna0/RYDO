@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
+import { getCurrentUser } from '@/constants/auth';
 
 /* =====================================================
    BACKEND
@@ -24,8 +25,8 @@ import { API_URL } from '@/constants/network';
 ===================================================== */
 
 export default function JoinRide() {
-
-  const [riderName, setRiderName] = useState('');
+  const currentUser = getCurrentUser();
+  const [riderName, setRiderName] = useState(currentUser?.name || '');
   const [rideCode, setRideCode] = useState('');
   const [loading, setLoading] = useState(false);
 
