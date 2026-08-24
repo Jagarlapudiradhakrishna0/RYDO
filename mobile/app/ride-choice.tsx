@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 export default function RideChoiceScreen() {
   return (
@@ -44,9 +45,7 @@ export default function RideChoiceScreen() {
               RYDO
             </Text>
 
-            <Text style={styles.headerNumber}>
-              02
-            </Text>
+            <ProfileHeaderButton size={34} />
 
           </View>
 

@@ -33,6 +33,7 @@ import MapView, {
 import * as Location from 'expo-location';
 
 import { io, Socket } from 'socket.io-client';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 import { API_URL } from '@/constants/network';
 
@@ -56,6 +57,7 @@ type RiderLocation = {
 type Rider = {
   _id?: string;
   name: string;
+  role?: string;
   joinedAt?: string;
   location?: RiderLocation | null;
 };
@@ -97,8 +99,29 @@ export default function CaptainDashboard() {
   const [riders, setRiders] =
     useState<Rider[]>([]);
 
+  const [selectedRider, setSelectedRider] =
+    useState<Rider | null>(null);
+
   const [loadingRiders, setLoadingRiders] =
     useState(true);
+
+  const isRiderLive = (rider: Rider) => {
+    if (!rider.location?.updatedAt) return true;
+    const age = Date.now() - new Date(rider.location.updatedAt).getTime();
+    return age < 35000;
+  };
+
+  const getRiderStatusLabel = (rider: Rider) => {
+    if (!rider.location) return 'NO LOCATION';
+    if (!rider.location.updatedAt) return 'LIVE';
+    const ageMs = Date.now() - new Date(rider.location.updatedAt).getTime();
+    const ageSec = Math.floor(ageMs / 1000);
+    if (ageSec < 35) return 'LIVE';
+    if (ageSec < 60) return `LAST SEEN ${ageSec}s AGO`;
+    const ageMin = Math.floor(ageSec / 60);
+    if (ageMin < 60) return `LAST SEEN ${ageMin}m AGO`;
+    return 'OFFLINE';
+  };
 
   /* ===================================================
      ROUTE
@@ -213,6 +236,15 @@ export default function CaptainDashboard() {
   const lastLocationUploadRef =
     useRef(0);
 
+  // Persistent last-known rider locations keyed by userId
+  // Never cleared by temporary empty API responses
+  const lastKnownRiderLocationsRef =
+    useRef<Record<string, { latitude: number; longitude: number; updatedAt?: string }>>({});
+
+  // Monotonically increasing fetch sequence number
+  // Prevents stale responses from overwriting newer state
+  const fetchSeqRef = useRef(0);
+
   /* ===================================================
      PARAMS
   =================================================== */
@@ -240,6 +272,17 @@ export default function CaptainDashboard() {
 
   const displayRideCode =
     rideCode || '------';
+
+  useEffect(() => {
+    console.log('[RYDO LOCATION DEBUG]', {
+      role: 'captain',
+      userId: `captain-${String(displayCaptain).toLowerCase().replace(/\s+/g, '-')}`,
+      name: displayCaptain,
+      rideCode,
+      isCaptain: true,
+      isRideMember: true,
+    });
+  }, [rideCode, displayCaptain]);
 
   /* ===================================================
      BEARING
@@ -517,6 +560,40 @@ export default function CaptainDashboard() {
         return;
       }
 
+      const code =
+        String(rideCode)
+          .trim()
+          .toUpperCase();
+
+      const name =
+        String(displayCaptain || 'Captain').trim();
+
+      const lat = coords.latitude;
+      const lng = coords.longitude;
+
+      // 1. Emit live location via Socket.IO
+      // NOTE: userId is REQUIRED by socket server (line 220 of rideSocket.js)
+      const socket = socketRef.current;
+      const captainSocketId = `captain-${name.toLowerCase().replace(/\s+/g, '-')}`;
+      if (socket && socket.connected) {
+        socket.emit('updateLocation', {
+          rideCode: code,
+          userId: captainSocketId,
+          memberId: captainSocketId,
+          userName: name,
+          role: 'captain',
+          latitude: lat,
+          longitude: lng,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // Development safe log
+      console.log(
+        `RYDO LOCATION: User: ${name} | Role: captain | Ride: ${code} | Latitude: ${lat.toFixed(5)} | Longitude: ${lng.toFixed(5)}`
+      );
+
+      // 2. Throttled HTTP update (every 5s)
       const now =
         Date.now();
 
@@ -530,11 +607,6 @@ export default function CaptainDashboard() {
 
       lastLocationUploadRef.current =
         now;
-
-      const code =
-        String(rideCode)
-          .trim()
-          .toUpperCase();
 
       try {
         await fetch(
@@ -551,11 +623,8 @@ export default function CaptainDashboard() {
             },
 
             body: JSON.stringify({
-              latitude:
-                coords.latitude,
-
-              longitude:
-                coords.longitude,
+              latitude: lat,
+              longitude: lng,
             }),
           }
         );
@@ -582,6 +651,10 @@ export default function CaptainDashboard() {
           .trim()
           .toUpperCase();
 
+      // Assign a monotonically increasing sequence number to this request.
+      // If a newer request completes first, this stale response is discarded.
+      const thisSeq = ++fetchSeqRef.current;
+
       try {
         const response =
           await fetch(
@@ -590,120 +663,138 @@ export default function CaptainDashboard() {
             )}/locations`
           );
 
-        if (
-          !response.ok
-        ) {
+        if (!response.ok) {
           return;
         }
 
-        const data =
-          await response.json();
+        const data = await response.json();
 
-        if (
-          !data.success
-        ) {
+        // Discard stale response — a newer request already completed
+        if (thisSeq !== fetchSeqRef.current) {
           return;
         }
 
-        const backendRiders =
-          Array.isArray(
-            data.riders
-          )
-            ? data.riders
-            : [];
+        if (!data.success) {
+          return;
+        }
 
-        setRiders(
-          currentRiders =>
-            currentRiders.map(
-              rider => {
-                const serverRider =
-                  backendRiders.find(
-                    (item: any) =>
-                      String(
-                        item._id ||
-                          item.userId ||
-                          ''
-                      ) ===
-                        String(
-                          rider._id ||
-                            ''
-                        ) ||
-                      item.name ===
-                        rider.name
-                  );
+        const backendRiders: any[] =
+          Array.isArray(data.riders) ? data.riders : [];
 
-                if (
-                  !serverRider
-                ) {
-                  return rider;
-                }
-
-                if (
-                  serverRider.location &&
-                  typeof serverRider
-                    .location
-                    .latitude ===
-                    'number' &&
-                  typeof serverRider
-                    .location
-                    .longitude ===
-                    'number'
-                ) {
-                  return {
-                    ...rider,
-
-                    location: {
-                      latitude:
-                        serverRider
-                          .location
-                          .latitude,
-
-                      longitude:
-                        serverRider
-                          .location
-                          .longitude,
-
-                      updatedAt:
-                        serverRider
-                          .location
-                          .updatedAt,
-                    },
-                  };
-                }
-
-                return rider;
-              }
-            )
+        const ridersWithLoc = backendRiders.filter(
+          (r) =>
+            r.location &&
+            typeof r.location.latitude === 'number' &&
+            typeof r.location.longitude === 'number'
         );
 
+        console.log(
+          '[LIVE] RESPONSE rideCode:', code,
+          '| captainPresent:', !!(data.captain?.location),
+          '| riderCount:', backendRiders.length,
+          '| ridersWithLoc:', ridersWithLoc.length
+        );
+
+        // Update last-known cache for riders that have valid locations.
+        // Cache under BOTH userId key AND name key — handles myMemberId fallback case.
+        backendRiders.forEach((serverRider: any) => {
+          const key = serverRider.userId || serverRider.id || serverRider._id;
+          const rName = serverRider.name;
+          if (
+            serverRider.location &&
+            typeof serverRider.location.latitude === 'number' &&
+            typeof serverRider.location.longitude === 'number'
+          ) {
+            const locEntry = {
+              latitude: Number(serverRider.location.latitude),
+              longitude: Number(serverRider.location.longitude),
+              updatedAt: serverRider.location.updatedAt,
+            };
+            if (key) lastKnownRiderLocationsRef.current[String(key)] = locEntry;
+            if (rName) lastKnownRiderLocationsRef.current[rName.toLowerCase()] = locEntry;
+          }
+        });
+
+        // Merge rider data into state.
+        // SOURCE OF TRUTH: ride.riders membership (already in state from fetchRide).
+        // LOCATION SOURCE: live locations response + lastKnownRiderLocations cache.
+        // NEVER replace location with null if we have a last-known value.
+        setRiders(currentRiders => {
+          const merged = [...currentRiders];
+
+          backendRiders.forEach((serverRider: any) => {
+            const key = serverRider.userId || serverRider.id || serverRider._id;
+            const name = serverRider.name;
+
+            // Match by userId (primary) then by name (fallback)
+            const idx = merged.findIndex(
+              (r) =>
+                (key && r._id && String(r._id) === String(key)) ||
+                (name && r.name && r.name.toLowerCase() === String(name).toLowerCase())
+            );
+
+            const hasValidLoc =
+              serverRider.location &&
+              typeof serverRider.location.latitude === 'number' &&
+              typeof serverRider.location.longitude === 'number';
+
+            // Priority: fresh API location > last-known cache (by key or name) > existing state location
+            const cachedLoc =
+              (key && lastKnownRiderLocationsRef.current[String(key)]) ||
+              (name && lastKnownRiderLocationsRef.current[name.toLowerCase()]) ||
+              null;
+
+            const locData = hasValidLoc
+              ? {
+                  latitude: Number(serverRider.location.latitude),
+                  longitude: Number(serverRider.location.longitude),
+                  updatedAt: serverRider.location.updatedAt,
+                }
+              : cachedLoc
+              ? cachedLoc
+              : idx >= 0
+              ? merged[idx].location
+              : null;
+
+            const riderObj: Rider = {
+              _id: key || (idx >= 0 ? merged[idx]._id : undefined),
+              name: name || (idx >= 0 ? merged[idx].name : 'Rider'),
+              role: 'rider',
+              location: locData,
+            };
+
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...riderObj };
+            } else {
+              merged.push(riderObj);
+            }
+          });
+
+          console.log(
+            '[CAPTAIN MAP] riderCount:', merged.length,
+            '| riderIdsWithLocations:',
+            merged.filter((r) => r.location).map((r) => r._id).join(', ')
+          );
+
+          return merged;
+        });
+
+        // Update captain location from live response (never from fetchRide,
+        // which has the persisted DB snapshot, not the real-time location).
+        const captainLoc = data.captain?.location || data.captainLocation;
         if (
-          data.captainLocation &&
-          typeof data.captainLocation
-            .latitude ===
-            'number' &&
-          typeof data.captainLocation
-            .longitude ===
-            'number'
+          captainLoc &&
+          typeof captainLoc.latitude === 'number' &&
+          typeof captainLoc.longitude === 'number'
         ) {
           setCaptainLocation({
-            latitude:
-              data.captainLocation
-                .latitude,
-
-            longitude:
-              data.captainLocation
-                .longitude,
-
-            updatedAt:
-              data.captainLocation
-                .updatedAt,
+            latitude: Number(captainLoc.latitude),
+            longitude: Number(captainLoc.longitude),
+            updatedAt: captainLoc.updatedAt,
           });
         }
       } catch (error) {
-        console.log(
-          'RYDO: Rider locations error:',
-          error
-        );
+        console.log('RYDO: Rider locations error:', error);
       }
     };
 
@@ -815,54 +906,79 @@ export default function CaptainDashboard() {
         }
 
         /* =============================================
-           RIDERS
+           RIDERS — membership only, preserve locations
+        =============================================
+           fetchRide() gives us the MEMBER LIST.
+           Locations come from fetchRiderLocations().
+           We must NOT overwrite existing rider locations
+           with null just because the ride document
+           doesn't have up-to-date GPS coordinates.
         ============================================= */
 
         const backendRiders =
-          Array.isArray(
-            ride?.riders
-          )
-            ? ride.riders
-            : [];
+          Array.isArray(ride?.riders) ? ride.riders : [];
 
-        setRiders(
-          backendRiders.map(
-            (rider: any) => ({
-              _id:
-                rider?._id,
+        setRiders(currentRiders => {
+          // Build a new list that merges membership from backend
+          // with last-known locations from our persistent cache.
+          const merged = [...currentRiders];
 
-              name:
-                rider?.name ||
-                'Rider',
+          backendRiders.forEach((rider: any) => {
+            const riderId = String(rider?.userId || rider?._id || '');
+            const riderName = rider?.name || 'Rider';
 
-              joinedAt:
-                rider?.joinedAt,
+            // Match existing rider by userId first, then by name
+            const idx = merged.findIndex(
+              (r) =>
+                (riderId && r._id && String(r._id) === riderId) ||
+                r.name.toLowerCase() === riderName.toLowerCase()
+            );
 
-              location:
-                rider?.location &&
-                typeof rider.location
-                  .latitude ===
-                  'number' &&
-                typeof rider.location
-                  .longitude ===
-                  'number'
-                  ? {
-                      latitude:
-                        rider.location
-                          .latitude,
+            // Use last-known cached location — check both userId key and name key
+            // because the rider's myMemberId may have been name-based on first connect
+            const cachedLoc =
+              (riderId && lastKnownRiderLocationsRef.current[riderId]) ||
+              (riderName && lastKnownRiderLocationsRef.current[riderName.toLowerCase()]) ||
+              undefined;
 
-                      longitude:
-                        rider.location
-                          .longitude,
+            const existingLoc = idx >= 0 ? merged[idx].location : null;
 
-                      updatedAt:
-                        rider.location
-                          .updatedAt,
-                    }
-                  : null,
-            })
-          )
-        );
+            // Priority: cached fresh location > existing state location > DB location > null
+            const riderDbLoc =
+              rider?.location &&
+              typeof rider.location.latitude === 'number' &&
+              typeof rider.location.longitude === 'number'
+                ? {
+                    latitude: rider.location.latitude,
+                    longitude: rider.location.longitude,
+                    updatedAt: rider.location.updatedAt,
+                  }
+                : null;
+
+            const location = cachedLoc ?? existingLoc ?? riderDbLoc ?? null;
+
+            // Also seed the cache if the DB has a location and cache doesn't
+            if (riderId && riderDbLoc && !cachedLoc) {
+              lastKnownRiderLocationsRef.current[riderId] = riderDbLoc;
+            }
+
+            const riderObj: Rider = {
+              _id: riderId || (idx >= 0 ? merged[idx]._id : undefined),
+              name: riderName,
+              joinedAt: rider?.joinedAt,
+              role: 'rider',
+              location,
+            };
+
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...riderObj };
+            } else {
+              merged.push(riderObj);
+            }
+          });
+
+          return merged;
+        });
 
         /* =============================================
            ROUTE
@@ -993,24 +1109,28 @@ export default function CaptainDashboard() {
   =================================================== */
 
   useEffect(() => {
-    mountedRef.current =
-      true;
+    mountedRef.current = true;
 
+    // Initial load
     fetchRide();
+    fetchRiderLocations();
 
-    const interval =
-      setInterval(() => {
-        fetchRide();
-        fetchRiderLocations();
-      }, 10000);
+    // fetchRide: slow poll for ride membership/route changes (every 30s)
+    // fetchRiderLocations: fast poll for live GPS (every 5s)
+    // These are deliberately SEPARATE so fetchRide never races with
+    // and overwrites freshly-fetched GPS coordinates from fetchRiderLocations.
+    const rideInterval = setInterval(() => {
+      fetchRide();
+    }, 30000);
+
+    const locationInterval = setInterval(() => {
+      fetchRiderLocations();
+    }, 5000);
 
     return () => {
-      mountedRef.current =
-        false;
-
-      clearInterval(
-        interval
-      );
+      mountedRef.current = false;
+      clearInterval(rideInterval);
+      clearInterval(locationInterval);
     };
   }, [rideCode]);
 
@@ -1032,7 +1152,10 @@ export default function CaptainDashboard() {
       io(API_URL, {
         transports: [
           'websocket',
+          'polling',
         ],
+        reconnectionAttempts: 10,
+        timeout: 15000,
       });
 
     socketRef.current =
@@ -1051,6 +1174,9 @@ export default function CaptainDashboard() {
             rideCode:
               code,
 
+            memberId:
+              `captain-${displayCaptain.toLowerCase().replace(/\s+/g, '-')}`,
+
             userName:
               displayCaptain,
 
@@ -1060,6 +1186,89 @@ export default function CaptainDashboard() {
         );
       }
     );
+
+    /* -------------------------------------------------
+       INITIAL SNAPSHOT OF ALL ACTIVE LOCATIONS
+    ------------------------------------------------- */
+
+    socket.on(
+      'locationsSnapshot',
+      (snapshot: any) => {
+        console.log(
+          'RYDO: Captain received locationsSnapshot:',
+          snapshot
+        );
+
+        if (!snapshot) return;
+
+        if (
+          snapshot.captainLocation &&
+          typeof snapshot.captainLocation.latitude === 'number' &&
+          typeof snapshot.captainLocation.longitude === 'number'
+        ) {
+          setCaptainLocation({
+            latitude: snapshot.captainLocation.latitude,
+            longitude: snapshot.captainLocation.longitude,
+            updatedAt: snapshot.captainLocation.updatedAt,
+          });
+        }
+
+        if (Array.isArray(snapshot.riders)) {
+          setRiders((currentRiders) => {
+            const updatedRiders = [...currentRiders];
+
+            snapshot.riders.forEach((snapRider: any) => {
+              if (
+                !snapRider ||
+                typeof snapRider.latitude !== 'number' ||
+                typeof snapRider.longitude !== 'number'
+              )
+                return;
+
+              const memberKey =
+                snapRider.memberId ||
+                snapRider._id ||
+                snapRider.userName ||
+                snapRider.name;
+
+              const rName =
+                snapRider.userName || snapRider.name || 'Rider';
+
+              const existingIdx = updatedRiders.findIndex(
+                (r) =>
+                  (r._id && String(r._id) === String(memberKey)) ||
+                  r.name.toLowerCase() === rName.toLowerCase()
+              );
+
+              const riderObj: Rider = {
+                _id: memberKey,
+                name: rName,
+                location: {
+                  latitude: snapRider.latitude,
+                  longitude: snapRider.longitude,
+                  updatedAt: snapRider.updatedAt || new Date().toISOString(),
+                },
+              };
+
+              if (existingIdx >= 0) {
+                updatedRiders[existingIdx] = {
+                  ...updatedRiders[existingIdx],
+                  ...riderObj,
+                };
+              } else {
+                updatedRiders.push(riderObj);
+              }
+            });
+
+            return updatedRiders;
+          });
+        }
+      }
+    );
+
+    /* -------------------------------------------------
+       REALTIME LOCATION BROADCASTS
+    ------------------------------------------------- */
 
     socket.on(
       'locationUpdated',
@@ -1110,50 +1319,55 @@ export default function CaptainDashboard() {
            RIDER
         ============================================= */
 
-        if (
-          payload.role ===
-          'rider'
-        ) {
-          setRiders(
-            currentRiders =>
-              currentRiders.map(
-                rider => {
-                  const sameId =
-                    rider._id &&
-                    payload.userId &&
-                    String(
-                      rider._id
-                    ) ===
-                      String(
-                        payload.userId
-                      );
+        if (payload.role === 'rider') {
+          const memberKey = payload.userId || payload.memberId || payload.userName;
+          const rName = payload.userName || 'Rider';
 
-                  const sameName =
-                    rider.name ===
-                    payload.userName;
+          const updatedAt =
+            payload.updatedAt || payload.timestamp || new Date().toISOString();
 
-                  if (
-                    sameId ||
-                    sameName
-                  ) {
-                    return {
-                      ...rider,
+          const newLocation = { latitude, longitude, updatedAt };
 
-                      location: {
-                        latitude,
-                        longitude,
+          // Cache under every possible key so any future lookup hits
+          if (memberKey) {
+            lastKnownRiderLocationsRef.current[String(memberKey)] = newLocation;
+          }
+          if (rName) {
+            lastKnownRiderLocationsRef.current[rName.toLowerCase()] = newLocation;
+          }
 
-                        updatedAt:
-                          payload.timestamp ||
-                          new Date().toISOString(),
-                      },
-                    };
-                  }
+          console.log('[RYDO CAPTAIN SOCKET LOCATION RECEIVED]', {
+            rideCode: code,
+            userId: memberKey,
+            name: rName,
+            latitude,
+            longitude,
+          });
 
-                  return rider;
-                }
-              )
-          );
+          setRiders((currentRiders) => {
+            // Match by userId first, then by name (handles fallback myMemberId case)
+            const existingIdx = currentRiders.findIndex(
+              (r) =>
+                (memberKey && r._id && String(r._id) === String(memberKey)) ||
+                (rName && r.name && r.name.toLowerCase() === rName.toLowerCase())
+            );
+
+            const updatedRider: Rider = {
+              _id: memberKey,  // normalize _id to the socket userId
+              name: rName,
+              role: 'rider',
+              location: newLocation,
+            };
+
+            if (existingIdx >= 0) {
+              const next = [...currentRiders];
+              next[existingIdx] = { ...next[existingIdx], ...updatedRider };
+              return next;
+            }
+
+            // Rider not yet in state — add them directly from socket
+            return [...currentRiders, updatedRider];
+          });
         }
 
         /* =============================================
@@ -1169,6 +1383,7 @@ export default function CaptainDashboard() {
             longitude,
 
             updatedAt:
+              payload.updatedAt ||
               payload.timestamp ||
               new Date().toISOString(),
           });
@@ -1196,29 +1411,18 @@ export default function CaptainDashboard() {
     );
 
     return () => {
+      socket.off('connect');
+      socket.off('locationsSnapshot');
+      socket.off('locationUpdated');
+      socket.off('disconnect');
+      socket.off('connect_error');
       socket.emit(
-        'leaveRide',
-        {
-          rideCode:
-            code,
-
-          userName:
-            displayCaptain,
-
-          role:
-            'captain',
-        }
+        'leaveRide'
       );
-
       socket.disconnect();
-
-      socketRef.current =
-        null;
+      socketRef.current = null;
     };
-  }, [
-    rideCode,
-    displayCaptain,
-  ]);
+  }, [rideCode, displayCaptain]);
 
   /* ===================================================
      LOCATION TRACKING
@@ -1329,27 +1533,19 @@ export default function CaptainDashboard() {
             socketRef.current.connected &&
             rideCode
           ) {
+            const captainId = `captain-${String(displayCaptain).toLowerCase().replace(/\s+/g, '-')}`;
             socketRef.current.emit(
               'updateLocation',
               {
                 rideCode:
-                  String(
-                    rideCode
-                  )
-                    .trim()
-                    .toUpperCase(),
-
-                userName:
-                  displayCaptain,
-
-                role:
-                  'captain',
-
-                latitude:
-                  coords.latitude,
-
-                longitude:
-                  coords.longitude,
+                  String(rideCode).trim().toUpperCase(),
+                userId: captainId,
+                memberId: captainId,
+                userName: displayCaptain,
+                role: 'captain',
+                latitude: coords.latitude,
+                longitude: coords.longitude,
+                updatedAt: new Date().toISOString(),
               }
             );
           }
@@ -1485,31 +1681,22 @@ export default function CaptainDashboard() {
 
                 if (
                   socketRef.current &&
-                  socketRef.current
-                    .connected &&
+                  socketRef.current.connected &&
                   rideCode
                 ) {
+                  const captainId = `captain-${String(displayCaptain).toLowerCase().replace(/\s+/g, '-')}`;
                   socketRef.current.emit(
                     'updateLocation',
                     {
                       rideCode:
-                        String(
-                          rideCode
-                        )
-                          .trim()
-                          .toUpperCase(),
-
-                      userName:
-                        displayCaptain,
-
-                      role:
-                        'captain',
-
-                      latitude:
-                        newCoords.latitude,
-
-                      longitude:
-                        newCoords.longitude,
+                        String(rideCode).trim().toUpperCase(),
+                      userId: captainId,
+                      memberId: captainId,
+                      userName: displayCaptain,
+                      role: 'captain',
+                      latitude: newCoords.latitude,
+                      longitude: newCoords.longitude,
+                      updatedAt: new Date().toISOString(),
                     }
                   );
                 }
@@ -1551,11 +1738,13 @@ export default function CaptainDashboard() {
         subscription.remove();
       }
     };
+  // DO NOT include roadRoute.length or routeDistance as deps here.
+  // They change when the route loads, which would restart the GPS watcher
+  // and re-request permissions every time. rideCode and displayCaptain
+  // are the only values that legitimately require restarting tracking.
   }, [
     rideCode,
     displayCaptain,
-    roadRoute.length,
-    routeDistance,
   ]);
 
   /* ===================================================
@@ -2264,28 +2453,32 @@ export default function CaptainDashboard() {
             </Text>
           </View>
 
-          <View
-            style={
-              styles.status
-            }
-          >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <View
-              style={[
-                styles.statusDot,
-                rideStarted &&
-                  styles.statusDotActive,
-              ]}
-            />
-
-            <Text
               style={
-                styles.statusText
+                styles.status
               }
             >
-              {rideStarted
-                ? 'LIVE'
-                : 'READY'}
-            </Text>
+              <View
+                style={[
+                  styles.statusDot,
+                  rideStarted &&
+                    styles.statusDotActive,
+                ]}
+              />
+
+              <Text
+                style={
+                  styles.statusText
+                }
+              >
+                {rideStarted
+                  ? 'LIVE'
+                  : 'READY'}
+              </Text>
+            </View>
+
+            <ProfileHeaderButton size={34} />
           </View>
         </View>
 
@@ -2567,7 +2760,7 @@ export default function CaptainDashboard() {
               styles.mapContainer
             }
           >
-            {location ? (
+            {(location || captainLocation) ? (
               <MapView
                 ref={mapRef}
 
@@ -2584,29 +2777,35 @@ export default function CaptainDashboard() {
                 }
 
                 showsCompass={
-                  !navigationMode
+                  true
                 }
 
-                /*
-                  IMPORTANT:
-                  Disable map scrolling so
-                  parent ScrollView can scroll.
-                */
+                showsScale={
+                  true
+                }
 
                 scrollEnabled={
-                  false
+                  true
                 }
 
                 zoomEnabled={
-                  false
+                  true
+                }
+
+                zoomTapEnabled={
+                  true
+                }
+
+                zoomControlEnabled={
+                  true
                 }
 
                 rotateEnabled={
-                  navigationMode
+                  true
                 }
 
                 pitchEnabled={
-                  navigationMode
+                  true
                 }
 
                 toolbarEnabled={
@@ -2621,10 +2820,10 @@ export default function CaptainDashboard() {
 
                 initialRegion={{
                   latitude:
-                    location.latitude,
+                    (location || captainLocation)!.latitude,
 
                   longitude:
-                    location.longitude,
+                    (location || captainLocation)!.longitude,
 
                   latitudeDelta:
                     0.05,
@@ -2667,10 +2866,10 @@ export default function CaptainDashboard() {
 
                   coordinate={{
                     latitude:
-                      location.latitude,
+                      (location || captainLocation)!.latitude,
 
                     longitude:
-                      location.longitude,
+                      (location || captainLocation)!.longitude,
                   }}
 
                   rotation={
@@ -2717,61 +2916,89 @@ export default function CaptainDashboard() {
                     index
                   ) => {
                     if (
-                      !rider.location
+                      !rider.location ||
+                      !Number.isFinite(Number(rider.location.latitude)) ||
+                      !Number.isFinite(Number(rider.location.longitude))
                     ) {
                       return null;
                     }
 
+                    const isLive = isRiderLive(rider);
+                    const initial = String(rider.name || 'R')
+                      .charAt(0)
+                      .toUpperCase();
+                    const isSelected =
+                      selectedRider &&
+                      ((selectedRider._id && selectedRider._id === rider._id) ||
+                        selectedRider.name === rider.name);
+
                     return (
                       <Marker
-                        key={
-                          `rider-location-${
-                            rider._id ||
-                            rider.name ||
-                            index
-                          }`
-                        }
+                        key={`rider-${rider._id || rider.name || index}`}
+
+                        identifier={`rider-${rider._id || rider.name || index}`}
 
                         coordinate={{
-                          latitude:
-                            rider
-                              .location
-                              .latitude,
-
-                          longitude:
-                            rider
-                              .location
-                              .longitude,
+                          latitude: rider.location.latitude,
+                          longitude: rider.location.longitude,
                         }}
 
-                        title={
-                          rider.name
-                        }
+                        title={rider.name}
 
-                        description="RYDO Rider"
+                        description={`RYDO RIDER • ${getRiderStatusLabel(rider)}`}
 
-                        tracksViewChanges={
-                          true
-                        }
+                        onPress={() => setSelectedRider(rider)}
+
+                        tracksViewChanges={false}
+
+                        zIndex={isSelected ? 50 : 25}
                       >
                         <View
                           style={
-                            styles.riderMarker
+                            styles.riderMarkerWrapper
                           }
                         >
-                          <Text
+                          <View
+                            style={[
+                              styles.riderMarker,
+                              isLive
+                                ? styles.riderMarkerLive
+                                : styles.riderMarkerOffline,
+                              isSelected &&
+                                styles.riderMarkerSelected,
+                            ]}
+                          >
+                            <Text
+                              style={
+                                styles.riderMarkerText
+                              }
+                            >
+                              {initial}
+                            </Text>
+                          </View>
+
+                          <View
                             style={
-                              styles.riderMarkerText
+                              styles.riderMarkerBadge
                             }
                           >
-                            {String(
-                              rider.name
-                            )
-                              .charAt(
-                                0
-                              )
-                              .toUpperCase()}
-                          </Text>
+                            <View
+                              style={[
+                                styles.riderMarkerDot,
+                                isLive
+                                  ? styles.riderMarkerDotLive
+                                  : styles.riderMarkerDotOffline,
+                              ]}
+                            />
+                            <Text
+                              style={
+                                styles.riderMarkerName
+                              }
+                              numberOfLines={1}
+                            >
+                              {rider.name}
+                            </Text>
+                          </View>
                         </View>
                       </Marker>
                     );
@@ -3003,6 +3230,68 @@ export default function CaptainDashboard() {
               )}
 
             {/* =========================================
+                SELECTED RIDER INFO CARD
+            ========================================= */}
+
+            {selectedRider && (
+              <View style={styles.selectedRiderCard}>
+                <View style={styles.selectedRiderHeader}>
+                  <View
+                    style={[
+                      styles.selectedRiderAvatar,
+                      isRiderLive(selectedRider)
+                        ? styles.selectedRiderAvatarLive
+                        : styles.selectedRiderAvatarOffline,
+                    ]}
+                  >
+                    <Text style={styles.selectedRiderAvatarText}>
+                      {String(selectedRider.name || 'R')
+                        .charAt(0)
+                        .toUpperCase()}
+                    </Text>
+                  </View>
+
+                  <View style={styles.selectedRiderInfo}>
+                    <Text style={styles.selectedRiderName} numberOfLines={1}>
+                      {selectedRider.name}
+                    </Text>
+                    <Text style={styles.selectedRiderRole}>
+                      RYDO RIDER
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => setSelectedRider(null)}
+                    style={styles.selectedRiderClose}
+                  >
+                    <Text style={styles.selectedRiderCloseText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.selectedRiderMetaRow}>
+                  <View
+                    style={[
+                      styles.selectedRiderStatusDot,
+                      isRiderLive(selectedRider)
+                        ? styles.riderStatusDotLive
+                        : styles.riderStatusDotOffline,
+                    ]}
+                  />
+                  <Text style={styles.selectedRiderStatusText}>
+                    {getRiderStatusLabel(selectedRider)}
+                  </Text>
+
+                  {selectedRider.location && (
+                    <Text style={styles.selectedRiderCoordsText}>
+                      {selectedRider.location.latitude.toFixed(4)}, {selectedRider.location.longitude.toFixed(4)}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {/* =========================================
                 NAVIGATION BUTTON
             ========================================= */}
 
@@ -3126,69 +3415,78 @@ export default function CaptainDashboard() {
                 (
                   rider,
                   index
-                ) => (
-                  <View
-                    key={
-                      rider._id ||
-                      `${rider.name}-${index}`
-                    }
+                ) => {
+                  const isLive = isRiderLive(rider);
+                  const isSelected =
+                    selectedRider &&
+                    ((selectedRider._id && selectedRider._id === rider._id) ||
+                      selectedRider.name === rider.name);
 
-                    style={
-                      styles.liveRiderRow
-                    }
-                  >
-                    <View
-                      style={[
-                        styles.liveRiderDot,
-
-                        !rider.location &&
-                          styles.liveRiderDotOffline,
-                      ]}
-                    />
-
-                    <View
-                      style={
-                        styles.liveRiderInfo
+                  return (
+                    <TouchableOpacity
+                      key={
+                        rider._id ||
+                        `${rider.name}-${index}`
                       }
+                      activeOpacity={0.7}
+                      onPress={() => setSelectedRider(rider)}
+                      style={[
+                        styles.liveRiderRow,
+                        isSelected && styles.liveRiderRowSelected,
+                      ]}
                     >
-                      <Text
+                      <View
+                        style={[
+                          styles.liveRiderDot,
+                          isLive
+                            ? styles.riderMarkerDotLive
+                            : styles.riderMarkerDotOffline,
+                        ]}
+                      />
+
+                      <View
                         style={
-                          styles.liveRiderName
+                          styles.liveRiderInfo
                         }
                       >
-                        {rider.name}
-                      </Text>
+                        <Text
+                          style={
+                            styles.liveRiderName
+                          }
+                        >
+                          {rider.name}
+                        </Text>
 
-                      <Text
-                        style={
-                          styles.liveRiderStatus
-                        }
-                      >
-                        {rider.location
-                          ? 'LIVE LOCATION'
-                          : 'LOCATION UNAVAILABLE'}
-                      </Text>
-                    </View>
+                        <Text
+                          style={[
+                            styles.liveRiderStatus,
+                            isLive && styles.liveRiderStatusActive,
+                          ]}
+                        >
+                          {getRiderStatusLabel(rider)}
+                        </Text>
+                      </View>
 
-                    {rider.location && (
-                      <Text
-                        style={
-                          styles.liveRiderCoords
-                        }
-                      >
-                        {rider.location.latitude.toFixed(
-                          4
-                        )}
+                      {rider.location && (
+                        <Text
+                          style={
+                            styles.liveRiderCoords
+                          }
+                        >
+                          {rider.location.latitude.toFixed(
+                            4
+                          )}
 
-                        {'\n'}
+                          {'\n'}
 
-                        {rider.location.longitude.toFixed(
-                          4
-                        )}
-                      </Text>
-                    )}
-                  </View>
-                )
+                          {rider.location.longitude.toFixed(
+                            4
+                          )}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }
               )
             )}
           </View>
@@ -3355,25 +3653,26 @@ export default function CaptainDashboard() {
                       styles.memberStatus
                     }
                   >
-                    <View
-                      style={[
-                        styles.memberDot,
+                  <View
+                    style={[
+                      styles.memberDot,
+                      !isRiderLive(rider) &&
+                        styles.memberDotOffline,
+                    ]}
+                  />
 
-                        !rider.location &&
-                          styles.memberDotOffline,
-                      ]}
-                    />
-
-                    <Text
-                      style={
-                        styles.online
-                      }
-                    >
-                      {rider.location
-                        ? 'LIVE'
-                        : 'OFFLINE'}
-                    </Text>
-                  </View>
+                  <Text
+                    style={
+                      styles.online
+                    }
+                  >
+                    {isRiderLive(rider)
+                      ? 'LIVE'
+                      : rider.location
+                      ? getRiderStatusLabel(rider)
+                      : 'OFFLINE'}
+                  </Text>
+                </View>
                 </View>
               )
             )}
@@ -4173,50 +4472,222 @@ const styles =
        RIDER MARKER
     ================================================= */
 
+    riderMarkerWrapper: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
     riderMarker: {
-      width: 40,
-      height: 40,
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: '#1677FF',
+      borderWidth: 2.5,
+      borderColor: '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.6,
+      shadowRadius: 5,
+      elevation: 8,
+    },
 
-      borderRadius: 20,
+    riderMarkerLive: {
+      backgroundColor: '#1677FF',
+      borderColor: '#22C55E',
+      borderWidth: 2.5,
+    },
 
-      backgroundColor:
-        '#1677FF',
+    riderMarkerOffline: {
+      backgroundColor: '#444444',
+      borderColor: '#888888',
+      borderWidth: 2,
+    },
 
+    riderMarkerSelected: {
+      borderColor: '#FACC15',
       borderWidth: 3,
-
-      borderColor:
-        '#FFFFFF',
-
-      alignItems:
-        'center',
-
-      justifyContent:
-        'center',
-
-      shadowColor:
-        '#000000',
-
-      shadowOffset: {
-        width: 0,
-        height: 2,
-      },
-
-      shadowOpacity:
-        0.5,
-
-      shadowRadius: 4,
-
-      elevation: 7,
+      transform: [{ scale: 1.15 }],
     },
 
     riderMarkerText: {
-      color:
-        '#FFFFFF',
+      color: '#FFFFFF',
+      fontSize: 14,
+      fontWeight: '900',
+    },
 
+    riderMarkerBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,0,0,0.85)',
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+      marginTop: 3,
+      borderWidth: 0.5,
+      borderColor: '#333333',
+      maxWidth: 90,
+    },
+
+    riderMarkerDot: {
+      width: 5,
+      height: 5,
+      borderRadius: 2.5,
+      marginRight: 4,
+    },
+
+    riderMarkerDotLive: {
+      backgroundColor: '#22C55E',
+    },
+
+    riderMarkerDotOffline: {
+      backgroundColor: '#777777',
+    },
+
+    riderMarkerName: {
+      color: '#FFFFFF',
+      fontSize: 8,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
+
+    /* =================================================
+       SELECTED RIDER FLOATING CARD
+    ================================================= */
+
+    selectedRiderCard: {
+      position: 'absolute',
+      bottom: 85,
+      left: 14,
+      right: 14,
+      backgroundColor: '#0D0D0D',
+      borderWidth: 1.5,
+      borderColor: '#1677FF',
+      borderRadius: 8,
+      padding: 12,
+      zIndex: 35,
+      shadowColor: '#000000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.7,
+      shadowRadius: 8,
+      elevation: 12,
+    },
+
+    selectedRiderHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+
+    selectedRiderAvatar: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: '#1677FF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+
+    selectedRiderAvatarLive: {
+      backgroundColor: '#1677FF',
+      borderWidth: 2,
+      borderColor: '#22C55E',
+    },
+
+    selectedRiderAvatarOffline: {
+      backgroundColor: '#333333',
+      borderWidth: 1.5,
+      borderColor: '#666666',
+    },
+
+    selectedRiderAvatarText: {
+      color: '#FFFFFF',
+      fontSize: 14,
+      fontWeight: '900',
+    },
+
+    selectedRiderInfo: {
+      flex: 1,
+    },
+
+    selectedRiderName: {
+      color: '#FFFFFF',
       fontSize: 13,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
 
-      fontWeight:
-        '900',
+    selectedRiderRole: {
+      color: '#1677FF',
+      fontSize: 8,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      marginTop: 2,
+    },
+
+    selectedRiderClose: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: '#1A1A1A',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    selectedRiderCloseText: {
+      color: '#AAAAAA',
+      fontSize: 12,
+      fontWeight: '700',
+    },
+
+    selectedRiderMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: 1,
+      borderTopColor: '#1A1A1A',
+    },
+
+    selectedRiderStatusDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 3.5,
+      marginRight: 6,
+    },
+
+    selectedRiderStatusText: {
+      color: '#CCCCCC',
+      fontSize: 9,
+      fontWeight: '700',
+      letterSpacing: 0.8,
+      flex: 1,
+    },
+
+    selectedRiderCoordsText: {
+      color: '#666666',
+      fontSize: 8,
+      fontWeight: '600',
+    },
+
+    liveRiderRowSelected: {
+      backgroundColor: 'rgba(22,119,255,0.12)',
+      borderLeftWidth: 3,
+      borderLeftColor: '#1677FF',
+    },
+
+    liveRiderStatusActive: {
+      color: '#22C55E',
+      fontWeight: '800',
+    },
+
+    riderStatusDotLive: {
+      backgroundColor: '#22C55E',
+    },
+
+    riderStatusDotOffline: {
+      backgroundColor: '#666666',
     },
 
     /* =================================================

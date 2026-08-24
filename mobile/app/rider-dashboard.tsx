@@ -23,9 +23,11 @@ import {
 } from 'expo-router';
 
 import * as Location from 'expo-location';
+import { io, Socket } from 'socket.io-client';
 
 import { API_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 import MapView, {
   Marker,
@@ -70,6 +72,7 @@ type Rider = {
   location?: {
     latitude?: number;
     longitude?: number;
+    updatedAt?: string;
   };
 
   currentLocation?: {
@@ -135,10 +138,12 @@ export default function RiderDashboard() {
   const {
     rideCode,
     riderName,
+    userId: paramUserId,
   } =
     useLocalSearchParams<{
       rideCode?: string;
       riderName?: string;
+      userId?: string;
     }>();
 
 
@@ -241,6 +246,29 @@ export default function RiderDashboard() {
 
   const mapRef =
     useRef<MapView | null>(null);
+
+  const currentUser = getCurrentUser();
+  const socketRef = useRef<Socket | null>(null);
+  const lastLocationUploadRef = useRef(0);
+  const riderDbIdRef = useRef<string>(paramUserId ? String(paramUserId).trim() : '');
+
+  // Priority: param userId (from join-ride navigation) > currentUser._id > name-based fallback
+  // paramUserId is the most reliable because it was set at join time and matches what the DB stored.
+  const myMemberId =
+    (paramUserId && String(paramUserId).trim()) ||
+    currentUser?._id ||
+    `rider-${String(riderName || 'rider').toLowerCase().replace(/\s+/g, '-')}`;
+
+  useEffect(() => {
+    console.log('[RYDO LOCATION DEBUG]', {
+      role: 'rider',
+      userId: riderDbIdRef.current || myMemberId,
+      name: riderName || currentUser?.name || 'Rider',
+      rideCode,
+      isCaptain: false,
+      isRideMember: true,
+    });
+  }, [rideCode, riderName, myMemberId]);
 
 
   /* ===================================================
@@ -452,626 +480,554 @@ export default function RiderDashboard() {
 
 
   /* ===================================================
+     SAFE COORDINATE SETTERS
+  =================================================== */
+
+  const setCaptainLocationSafe = (lat: number, lng: number) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    setCaptainLocation((prev) => {
+      if (prev && Math.abs(prev.latitude - lat) < 0.00001 && Math.abs(prev.longitude - lng) < 0.00001) {
+        return prev;
+      }
+      return { latitude: lat, longitude: lng };
+    });
+  };
+
+  const setRiderLocationSafe = (lat: number, lng: number) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    setRiderLocation((prev) => {
+      if (prev && Math.abs(prev.latitude - lat) < 0.00001 && Math.abs(prev.longitude - lng) < 0.00001) {
+        return prev;
+      }
+      return { latitude: lat, longitude: lng };
+    });
+  };
+
+  const lastKnownLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+
+  /* ===================================================
+     PUBLISH RIDER LOCATION (SOCKET + HTTP FALLBACK)
+  =================================================== */
+
+  const publishRiderLocation = (lat: number, lng: number) => {
+    if (!rideCode) return;
+
+    const code = String(rideCode).toUpperCase().trim();
+    const name = String(riderName || currentUser?.name || 'Rider').trim();
+    const targetUserId = riderDbIdRef.current || (paramUserId && String(paramUserId).trim()) || myMemberId;
+
+    lastKnownLocationRef.current = { latitude: lat, longitude: lng };
+
+    console.log('[RYDO RIDER GPS]', {
+      userId: targetUserId,
+      role: 'rider',
+      rideCode: code,
+      latitude: lat,
+      longitude: lng,
+    });
+
+    console.log('[RYDO RIDER LOCATION SEND]', {
+      userId: targetUserId,
+      role: 'rider',
+      rideCode: code,
+      latitude: lat,
+      longitude: lng,
+    });
+
+    // 1. Emit live location via Socket.IO
+    const socket = socketRef.current;
+    if (socket && socket.connected) {
+      socket.emit('updateLocation', {
+        rideCode: code,
+        userId: targetUserId,
+        memberId: targetUserId,
+        userName: name,
+        role: 'rider',
+        latitude: lat,
+        longitude: lng,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // 2. Throttled HTTP persistence (every 4s)
+    const now = Date.now();
+    if (now - lastLocationUploadRef.current > 4000) {
+      lastLocationUploadRef.current = now;
+
+      // Primary REST update endpoint (works on Render)
+      if (riderDbIdRef.current) {
+        fetch(
+          `${API_URL}/api/rides/${encodeURIComponent(code)}/riders/${encodeURIComponent(riderDbIdRef.current)}/location`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              latitude: lat,
+              longitude: lng,
+            }),
+          }
+        ).catch(() => {});
+      }
+
+      // General fallback update endpoint
+      fetch(
+        `${API_URL}/api/rides/${encodeURIComponent(code)}/rider-location`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            riderName: name,
+            userId: targetUserId,
+            latitude: lat,
+            longitude: lng,
+          }),
+        }
+      ).catch(() => {});
+    }
+  };
+
+  /* ===================================================
      LIVE GPS
   =================================================== */
 
   useEffect(() => {
-
-    let subscription:
-      Location.LocationSubscription | null =
-      null;
-
+    let subscription: Location.LocationSubscription | null = null;
     let cancelled = false;
 
+    const startTracking = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
 
-    const startTracking =
-      async () => {
-
-        try {
-
-          const {
-            status,
-          } =
-            await Location.requestForegroundPermissionsAsync();
-
-
-          if (
-            cancelled ||
-            status !== 'granted'
-          ) {
-
-            setLocationPermissionDenied(
-              status !== 'granted'
-            );
-
-            setLocationLoading(false);
-
-            return;
-          }
-
-
-          setLocationPermissionDenied(false);
-
-
-          console.log(
-            'RYDO: LIVE GPS STARTED'
-          );
-
-
-          /* -----------------------------------------
-             FIRST LOCATION
-          ----------------------------------------- */
-
-          try {
-
-            const current =
-              await Location.getCurrentPositionAsync(
-                {
-                  accuracy:
-                    Location.Accuracy.Highest,
-                }
-              );
-
-
-            if (!cancelled) {
-
-              setRiderLocation({
-                latitude:
-                  current.coords.latitude,
-
-                longitude:
-                  current.coords.longitude,
-              });
-
-              setLocationLoading(false);
-            }
-
-          } catch (error) {
-
-            console.log(
-              'RYDO INITIAL GPS ERROR:',
-              error
-            );
-          }
-
-
-          /* -----------------------------------------
-             CONTINUOUS GPS
-          ----------------------------------------- */
-
-          subscription =
-            await Location.watchPositionAsync(
-              {
-
-                accuracy:
-                  Location.Accuracy.Highest,
-
-                timeInterval: 2000,
-
-                distanceInterval: 3,
-
-              },
-
-              location => {
-
-                if (cancelled) {
-                  return;
-                }
-
-
-                const {
-                  latitude,
-                  longitude,
-                } =
-                  location.coords;
-
-
-                console.log(
-                  'RYDO RIDER GPS:',
-                  latitude,
-                  longitude
-                );
-
-
-                setRiderLocation({
-                  latitude,
-                  longitude,
-                });
-
-
-                setLocationLoading(false);
-              }
-            );
-
-        } catch (error) {
-
-          console.log(
-            'RYDO GPS ERROR:',
-            error
-          );
-
+        if (cancelled || status !== 'granted') {
+          setLocationPermissionDenied(status !== 'granted');
           setLocationLoading(false);
+          return;
         }
-      };
 
+        setLocationPermissionDenied(false);
+        console.log('RYDO: LIVE GPS STARTED');
+
+        /* -----------------------------------------
+           FIRST LOCATION
+        ----------------------------------------- */
+        try {
+          const current = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Highest,
+          });
+
+          if (!cancelled) {
+            setRiderLocationSafe(current.coords.latitude, current.coords.longitude);
+            publishRiderLocation(current.coords.latitude, current.coords.longitude);
+            setLocationLoading(false);
+          }
+        } catch (error) {
+          console.log('RYDO INITIAL GPS ERROR:', error);
+        }
+
+        /* -----------------------------------------
+           CONTINUOUS GPS
+        ----------------------------------------- */
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Highest,
+            timeInterval: 2000,
+            distanceInterval: 3,
+          },
+          (location) => {
+            if (cancelled) return;
+            const { latitude, longitude } = location.coords;
+            setRiderLocationSafe(latitude, longitude);
+            publishRiderLocation(latitude, longitude);
+            setLocationLoading(false);
+          }
+        );
+      } catch (error) {
+        console.log('RYDO GPS ERROR:', error);
+        setLocationLoading(false);
+      }
+    };
 
     startTracking();
 
-
     return () => {
-
       cancelled = true;
-
       if (subscription) {
         subscription.remove();
       }
     };
+  }, [rideCode, riderName, myMemberId]);
 
-  }, []);
+
+  /* ===================================================
+     SOCKET.IO — CONNECT & REALTIME SYNC
+  =================================================== */
+
+  useEffect(() => {
+    if (!rideCode) return;
+
+    const code = String(rideCode).toUpperCase().trim();
+    const name = String(riderName || currentUser?.name || 'Rider').trim();
+
+    console.log('RYDO: Connecting Rider Socket.IO to:', API_URL);
+
+    const socket = io(API_URL, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 10,
+      timeout: 15000,
+    });
+
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('RYDO: Rider socket connected:', socket.id);
+      socket.emit('joinRide', {
+        rideCode: code,
+        userId: myMemberId,
+        memberId: myMemberId,
+        userName: name,
+        role: 'rider',
+      });
+
+      if (lastKnownLocationRef.current) {
+        socket.emit('updateLocation', {
+          rideCode: code,
+          userId: myMemberId,
+          memberId: myMemberId,
+          userName: name,
+          role: 'rider',
+          latitude: lastKnownLocationRef.current.latitude,
+          longitude: lastKnownLocationRef.current.longitude,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    // 1. Initial snapshot from server upon joining
+    socket.on('locationsSnapshot', (snapshot: any) => {
+      console.log('RYDO: Received locationsSnapshot in RiderDashboard');
+      if (!snapshot) return;
+
+      if (
+        snapshot.captainLocation &&
+        typeof snapshot.captainLocation.latitude === 'number' &&
+        typeof snapshot.captainLocation.longitude === 'number'
+      ) {
+        setCaptainLocationSafe(snapshot.captainLocation.latitude, snapshot.captainLocation.longitude);
+      }
+
+      if (Array.isArray(snapshot.riders)) {
+        const otherRiders = snapshot.riders
+          .filter(
+            (r: any) =>
+              r &&
+              typeof r.latitude === 'number' &&
+              typeof r.longitude === 'number' &&
+              (r.userId || r.memberId) !== myMemberId
+          )
+          .map((r: any) => ({
+            _id: r.userId || r.memberId || r._id,
+            name: r.userName || r.name || 'Rider',
+            role: 'rider',
+            latitude: r.latitude,
+            longitude: r.longitude,
+            updatedAt: r.updatedAt,
+          }));
+
+        if (otherRiders.length > 0) {
+          setLiveRiders(otherRiders);
+        }
+      }
+    });
+
+    // 2. Continuous real-time updates
+    socket.on('locationUpdated', (payload: any) => {
+      if (!payload) return;
+
+      const payloadCode = String(payload.rideCode || '').toUpperCase().trim();
+      if (payloadCode && payloadCode !== code) return;
+
+      const lat = Number(payload.latitude);
+      const lng = Number(payload.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const senderId = payload.userId || payload.memberId;
+
+      if (payload.role === 'captain') {
+        setCaptainLocationSafe(lat, lng);
+      } else if (payload.role === 'rider' && senderId !== myMemberId) {
+        setLiveRiders((prev) => {
+          const index = prev.findIndex(
+            (r) => (senderId && r._id === senderId) || r.name === payload.userName
+          );
+          const updated: Rider = {
+            _id: senderId,
+            name: payload.userName || 'Rider',
+            role: 'rider',
+            latitude: lat,
+            longitude: lng,
+            location: {
+              latitude: lat,
+              longitude: lng,
+              updatedAt: payload.updatedAt || new Date().toISOString(),
+            },
+          };
+          if (index >= 0) {
+            const next = [...prev];
+            next[index] = updated;
+            return next;
+          }
+          return [...prev, updated];
+        });
+      }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('RYDO: Rider socket disconnected:', reason);
+    });
+
+    return () => {
+      socket.off('connect');
+      socket.off('locationsSnapshot');
+      socket.off('locationUpdated');
+      socket.off('disconnect');
+      socket.emit('leaveRide');
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [rideCode, riderName, myMemberId]);
 
 
   /* ===================================================
      FETCH RIDE
   =================================================== */
 
-  const fetchRide =
-    async () => {
+  const fetchRide = async () => {
+    if (!rideCode) {
+      setLoading(false);
+      return;
+    }
 
-      if (!rideCode) {
+    try {
+      const code = String(rideCode).toUpperCase().trim();
+      const response = await fetch(`${API_URL}/api/rides/${encodeURIComponent(code)}`);
+      const data = await response.json();
 
-        setLoading(false);
-
+      if (!response.ok || !data.success) {
+        setBackendError(true);
         return;
       }
 
+      const fetchedRide = data.ride as Ride;
+      setRide(fetchedRide);
 
-      try {
-
-        const code =
-          String(rideCode)
-            .toUpperCase()
-            .trim();
-
-
-        const response =
-          await fetch(
-            `${API_URL}/api/rides/${encodeURIComponent(
-              code
-            )}`
-          );
-
-
-        const data =
-          await response.json();
-
-
-        console.log(
-          'RYDO RIDE:',
-          data
-        );
-
-
-        if (
-          !response.ok ||
-          !data.success
-        ) {
-
-          setBackendError(true);
-
-          return;
-        }
-
-
-        const fetchedRide =
-          data.ride as Ride;
-
-
-        setRide(
-          fetchedRide
-        );
-
-
-        /* -----------------------------------------
-           CAPTAIN LOCATION FROM RIDE
-        ----------------------------------------- */
-
-        if (
-          fetchedRide.captainLocation &&
-          typeof fetchedRide.captainLocation.latitude === 'number' &&
-          typeof fetchedRide.captainLocation.longitude === 'number'
-        ) {
-
-          setCaptainLocation({
-            latitude:
-              fetchedRide.captainLocation.latitude,
-
-            longitude:
-              fetchedRide.captainLocation.longitude,
-          });
-        }
-
-
-        setBackendError(false);
-
-      } catch (error) {
-
-        console.log(
-          'RYDO BACKEND ERROR:',
-          error
-        );
-
-        setBackendError(true);
-
-      } finally {
-
-        setLoading(false);
+      const myRiderObj = (fetchedRide.riders || []).find(
+        (r: any) =>
+          (myMemberId && (String(r.userId) === String(myMemberId) || String(r._id) === String(myMemberId))) ||
+          r.name?.toLowerCase() === (riderName || currentUser?.name || '').toLowerCase()
+      );
+      if (myRiderObj?._id) {
+        riderDbIdRef.current = String(myRiderObj._id);
       }
-    };
+
+      if (
+        fetchedRide.captainLocation &&
+        typeof fetchedRide.captainLocation.latitude === 'number' &&
+        typeof fetchedRide.captainLocation.longitude === 'number'
+      ) {
+        setCaptainLocationSafe(
+          fetchedRide.captainLocation.latitude,
+          fetchedRide.captainLocation.longitude
+        );
+      }
+
+      setBackendError(false);
+    } catch (error) {
+      console.log('RYDO BACKEND ERROR:', error);
+      setBackendError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
 
 
   /* ===================================================
      FETCH LIVE LOCATIONS
   =================================================== */
 
-  const fetchLiveLocations =
-    async () => {
+  const fetchLiveLocations = async () => {
+    if (!rideCode) return;
 
-      if (!rideCode) {
-        return;
+    try {
+      const code = String(rideCode).toUpperCase().trim();
+      const response = await fetch(`${API_URL}/api/rides/${encodeURIComponent(code)}/locations`);
+
+      if (!response.ok) return;
+
+      const data: any = await response.json();
+
+      const capLoc = data.captain?.location || data.captainLocation;
+      if (
+        capLoc &&
+        typeof capLoc.latitude === 'number' &&
+        typeof capLoc.longitude === 'number'
+      ) {
+        setCaptainLocationSafe(Number(capLoc.latitude), Number(capLoc.longitude));
       }
 
-
-      try {
-
-        const code =
-          String(rideCode)
-            .toUpperCase()
-            .trim();
-
-
-        const response =
-          await fetch(
-            `${API_URL}/api/rides/${encodeURIComponent(
-              code
-            )}/locations`
-          );
-
-
-        if (!response.ok) {
-          return;
-        }
-
-
-        const data =
-          await response.json() as LiveLocationsResponse;
-
-
-        console.log(
-          'RYDO LIVE LOCATIONS:',
-          data
-        );
-
-
-        /* -----------------------------------------
-           CAPTAIN
-        ----------------------------------------- */
-
-        if (
-          data.captainLocation &&
-          typeof data.captainLocation.latitude === 'number' &&
-          typeof data.captainLocation.longitude === 'number'
-        ) {
-
-          setCaptainLocation({
-            latitude:
-              data.captainLocation.latitude,
-
-            longitude:
-              data.captainLocation.longitude,
+      if (Array.isArray(data.riders)) {
+        const otherRiders = data.riders
+          .filter(
+            (r: any) =>
+              (r.userId || r._id || r.name) !== myMemberId &&
+              r.name !== (riderName || currentUser?.name)
+          )
+          .map((r: any) => {
+            const lat = Number(r.location?.latitude ?? r.latitude);
+            const lng = Number(r.location?.longitude ?? r.longitude);
+            return {
+              _id: r.userId || r.id || r._id,
+              name: r.name || 'Rider',
+              role: 'rider',
+              latitude: Number.isFinite(lat) ? lat : undefined,
+              longitude: Number.isFinite(lng) ? lng : undefined,
+              location:
+                Number.isFinite(lat) && Number.isFinite(lng)
+                  ? { latitude: lat, longitude: lng, updatedAt: r.location?.updatedAt }
+                  : null,
+            };
           });
+
+        if (otherRiders.length > 0) {
+          setLiveRiders(otherRiders);
         }
-
-
-        /* -----------------------------------------
-           RIDERS
-        ----------------------------------------- */
-
-        if (
-          Array.isArray(data.riders)
-        ) {
-
-          setLiveRiders(
-            data.riders
-          );
-
-        } else if (
-          Array.isArray(data.members)
-        ) {
-
-          setLiveRiders(
-            data.members.filter(
-              member =>
-                member.role === 'rider'
-            )
-          );
-        }
-
-      } catch (error) {
-
-        console.log(
-          'RYDO LIVE LOCATION FETCH ERROR:',
-          error
-        );
       }
-    };
+    } catch (error) {
+      console.log('RYDO LIVE LOCATION FETCH ERROR:', error);
+    }
+  };
 
 
   /* ===================================================
-     RIDE AUTO REFRESH
+     UNIFIED FALLBACK AUTO REFRESH (10s interval)
   =================================================== */
 
   useEffect(() => {
+    if (!rideCode) return;
 
     fetchRide();
-
-
-    const rideInterval =
-      setInterval(() => {
-
-        fetchRide();
-
-      }, 3000);
-
-
-    return () => {
-
-      clearInterval(
-        rideInterval
-      );
-    };
-
-  }, [rideCode]);
-
-
-  /* ===================================================
-     LIVE LOCATION AUTO REFRESH
-  =================================================== */
-
-  useEffect(() => {
-
-    if (!rideCode) {
-      return;
-    }
-
-
     fetchLiveLocations();
 
-
-    const locationInterval =
-      setInterval(() => {
-
-        fetchLiveLocations();
-
-      }, 2000);
-
+    const interval = setInterval(() => {
+      fetchRide();
+      fetchLiveLocations();
+    }, 10000);
 
     return () => {
-
-      clearInterval(
-        locationInterval
-      );
+      clearInterval(interval);
     };
-
   }, [rideCode]);
 
 
   /* ===================================================
-     ROUTE WAYPOINTS
+     ROUTE WAYPOINTS KEY (Memoized coordinate string)
   =================================================== */
 
-  const routeWaypoints =
-    useMemo(() => {
-
-      const points:
-        Coordinate[] = [];
-
-
-      if (route.start) {
-
-        points.push({
-          latitude:
-            route.start.latitude,
-
-          longitude:
-            route.start.longitude,
-        });
+  const routeWaypointsKey = useMemo(() => {
+    const pts: string[] = [];
+    if (route.start && Number.isFinite(route.start.latitude)) {
+      pts.push(`${route.start.latitude.toFixed(5)},${route.start.longitude.toFixed(5)}`);
+    }
+    (route.stops || []).forEach((stop) => {
+      if (stop && Number.isFinite(stop.latitude)) {
+        pts.push(`${stop.latitude.toFixed(5)},${stop.longitude.toFixed(5)}`);
       }
+    });
+    if (route.destination && Number.isFinite(route.destination.latitude)) {
+      pts.push(`${route.destination.latitude.toFixed(5)},${route.destination.longitude.toFixed(5)}`);
+    }
+    return pts.join(';');
+  }, [
+    route.start?.latitude,
+    route.start?.longitude,
+    route.stops,
+    route.destination?.latitude,
+    route.destination?.longitude,
+  ]);
 
-
-      route.stops.forEach(
-        stop => {
-
-          points.push({
-            latitude:
-              stop.latitude,
-
-            longitude:
-              stop.longitude,
-          });
-        }
-      );
-
-
-      if (route.destination) {
-
-        points.push({
-          latitude:
-            route.destination.latitude,
-
-          longitude:
-            route.destination.longitude,
-        });
-      }
-
-
-      return points;
-
-    }, [
-      route.start,
-      route.stops,
-      route.destination,
-    ]);
-
+  const lastCalculatedRouteKeyRef = useRef('');
 
   /* ===================================================
      CALCULATE ROAD ROUTE
   =================================================== */
 
   useEffect(() => {
-
     let cancelled = false;
 
+    if (!routeWaypointsKey || routeWaypointsKey.split(';').length < 2) {
+      setRoadRoute([]);
+      lastCalculatedRouteKeyRef.current = '';
+      return;
+    }
 
-    const calculateRoute =
-      async () => {
+    if (lastCalculatedRouteKeyRef.current === routeWaypointsKey) {
+      return;
+    }
 
-        if (
-          routeWaypoints.length < 2
-        ) {
+    lastCalculatedRouteKeyRef.current = routeWaypointsKey;
 
-          setRoadRoute([]);
+    const calculateRoute = async () => {
+      try {
+        setRouteLoading(true);
+        setRouteError(false);
 
-          return;
+        const url = `${OSRM_URL}/${routeWaypointsKey}?overview=full&geometries=geojson&steps=true&alternatives=false`;
+        console.log('RYDO ROUTING:', url);
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error('Routing request failed');
         }
 
+        const data = await response.json();
+        if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
+          throw new Error('No road route found');
+        }
 
-        try {
+        const geometry = data.routes[0]?.geometry;
+        if (!geometry || !geometry.coordinates) {
+          throw new Error('Route geometry missing');
+        }
 
-          setRouteLoading(true);
+        const convertedRoute: Coordinate[] = geometry.coordinates.map(
+          (coordinate: number[]) => ({
+            latitude: coordinate[1],
+            longitude: coordinate[0],
+          })
+        );
+
+        if (!cancelled) {
+          setRoadRoute(convertedRoute);
           setRouteError(false);
-
-
-          const coordinates =
-            routeWaypoints
-              .map(
-                point =>
-                  `${point.longitude},${point.latitude}`
-              )
-              .join(';');
-
-
-          const url =
-            `${OSRM_URL}/${coordinates}` +
-            `?overview=full` +
-            `&geometries=geojson` +
-            `&steps=true` +
-            `&alternatives=false`;
-
-
-          console.log(
-            'RYDO ROUTING:',
-            url
-          );
-
-
-          const response =
-            await fetch(url);
-
-
-          if (!response.ok) {
-
-            throw new Error(
-              'Routing request failed'
-            );
-          }
-
-
-          const data =
-            await response.json();
-
-
-          if (
-            data.code !== 'Ok' ||
-            !data.routes ||
-            !data.routes.length
-          ) {
-
-            throw new Error(
-              'No road route found'
-            );
-          }
-
-
-          const geometry =
-            data.routes[0]?.geometry;
-
-
-          if (
-            !geometry ||
-            !geometry.coordinates
-          ) {
-
-            throw new Error(
-              'Route geometry missing'
-            );
-          }
-
-
-          const convertedRoute:
-            Coordinate[] =
-            geometry.coordinates.map(
-              (coordinate: number[]) => ({
-                latitude:
-                  coordinate[1],
-
-                longitude:
-                  coordinate[0],
-              })
-            );
-
-
-          if (!cancelled) {
-
-            setRoadRoute(
-              convertedRoute
-            );
-
-            setRouteError(false);
-          }
-
-        } catch (error) {
-
-          console.log(
-            'RYDO ROUTING ERROR:',
-            error
-          );
-
-
-          if (!cancelled) {
-
-            setRoadRoute([]);
-
-            setRouteError(true);
-          }
-
-        } finally {
-
-          if (!cancelled) {
-            setRouteLoading(false);
-          }
         }
-      };
-
+      } catch (error) {
+        console.log('RYDO ROUTING ERROR:', error);
+        if (!cancelled) {
+          setRoadRoute([]);
+          setRouteError(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setRouteLoading(false);
+        }
+      }
+    };
 
     calculateRoute();
 
-
     return () => {
-
       cancelled = true;
     };
-
-  }, [routeWaypoints]);
+  }, [routeWaypointsKey]);
 
 
   /* ===================================================
@@ -1852,8 +1808,6 @@ export default function RiderDashboard() {
 
               style={styles.map}
 
-              provider={PROVIDER_GOOGLE}
-
               initialRegion={
                 mapInitialRegion
               }
@@ -1962,6 +1916,26 @@ export default function RiderDashboard() {
                 </Marker>
               )}
 
+              {/* OTHER LIVE RIDERS */}
+              {liveRiders.map((r, idx) => {
+                const rLat = r.location?.latitude ?? r.latitude;
+                const rLng = r.location?.longitude ?? r.longitude;
+                if (!rLat || !rLng) return null;
+
+                return (
+                  <Marker
+                    key={`live-rider-${r._id || r.name || idx}`}
+                    coordinate={{ latitude: rLat, longitude: rLng }}
+                    title={r.name || 'Rider'}
+                    description="RYDO Rider"
+                    zIndex={25}
+                  >
+                    <View style={styles.riderMarker}>
+                      <View style={styles.riderMarkerInner} />
+                    </View>
+                  </Marker>
+                );
+              })}
 
               {renderRouteMarkers()}
 
@@ -2662,26 +2636,30 @@ export default function RiderDashboard() {
                   RYDO
                 </Text>
 
-                <View
-                  style={
-                    styles.liveBadge
-                  }
-                >
-
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <View
                     style={
-                      styles.liveBadgeDot
-                    }
-                  />
-
-                  <Text
-                    style={
-                      styles.liveBadgeText
+                      styles.liveBadge
                     }
                   >
-                    LIVE
-                  </Text>
 
+                    <View
+                      style={
+                        styles.liveBadgeDot
+                      }
+                    />
+
+                    <Text
+                      style={
+                        styles.liveBadgeText
+                      }
+                    >
+                      LIVE
+                    </Text>
+
+                  </View>
+
+                  <ProfileHeaderButton size={28} />
                 </View>
 
               </View>
@@ -3225,32 +3203,36 @@ export default function RiderDashboard() {
                 </View>
 
 
-                <View
-                  style={
-                    styles.status
-                  }
-                >
-
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   <View
                     style={
-                      styles.statusDot
-                    }
-                  />
-
-                  <Text
-                    style={
-                      styles.statusText
+                      styles.status
                     }
                   >
 
-                    {loading
-                      ? 'CONNECTING'
-                      : backendError
-                      ? 'OFFLINE'
-                      : 'CONNECTED'}
+                    <View
+                      style={
+                        styles.statusDot
+                      }
+                    />
 
-                  </Text>
+                    <Text
+                      style={
+                        styles.statusText
+                      }
+                    >
 
+                      {loading
+                        ? 'CONNECTING'
+                        : backendError
+                        ? 'OFFLINE'
+                        : 'CONNECTED'}
+
+                    </Text>
+
+                  </View>
+
+                  <ProfileHeaderButton size={34} />
                 </View>
 
               </View>

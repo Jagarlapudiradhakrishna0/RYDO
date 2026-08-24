@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 export default function CreateRideScreen() {
   const currentUser = getCurrentUser();
@@ -133,9 +134,7 @@ export default function CreateRideScreen() {
               RYDO
             </Text>
 
-            <Text style={styles.headerNumber}>
-              03
-            </Text>
+            <ProfileHeaderButton size={34} />
           </View>
 
 

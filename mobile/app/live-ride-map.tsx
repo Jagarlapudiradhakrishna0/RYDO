@@ -35,6 +35,7 @@ import { io as SocketIO } from 'socket.io-client';
 
 import { API_URL, SOCKET_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 /* =====================================================
    OSRM
@@ -324,6 +325,56 @@ export default function LiveRideMap() {
         'RYDO: Ride joined via socket:',
         data
       );
+    });
+
+    /* -------------------------------------------------
+       INITIAL SNAPSHOT OF ALL ACTIVE LOCATIONS
+    ------------------------------------------------- */
+
+    socket.on('locationsSnapshot', (snapshot: any) => {
+      if (!mountedRef.current || !snapshot) return;
+
+      console.log('RYDO: Live map received locationsSnapshot:', snapshot);
+
+      setLiveMembers((prev) => {
+        const next = new Map(prev);
+
+        if (snapshot.captainLocation && Number.isFinite(Number(snapshot.captainLocation.latitude))) {
+          const capLat = Number(snapshot.captainLocation.latitude);
+          const capLng = Number(snapshot.captainLocation.longitude);
+          const capMemberId = String(snapshot.captainLocation.memberId || 'captain').trim();
+
+          if (capMemberId !== myMemberId) {
+            next.set(capMemberId, {
+              memberId: capMemberId,
+              userName: snapshot.captainLocation.userName || 'Captain',
+              role: 'captain',
+              latitude: capLat,
+              longitude: capLng,
+              updatedAt: snapshot.captainLocation.updatedAt || new Date().toISOString(),
+            });
+          }
+        }
+
+        if (Array.isArray(snapshot.riders)) {
+          snapshot.riders.forEach((r: any) => {
+            if (!r || !Number.isFinite(Number(r.latitude)) || !Number.isFinite(Number(r.longitude))) return;
+            const rMemberId = String(r.memberId || r._id || '').trim();
+            if (!rMemberId || rMemberId === myMemberId) return;
+
+            next.set(rMemberId, {
+              memberId: rMemberId,
+              userName: r.userName || r.name || 'Rider',
+              role: 'rider',
+              latitude: Number(r.latitude),
+              longitude: Number(r.longitude),
+              updatedAt: r.updatedAt || new Date().toISOString(),
+            });
+          });
+        }
+
+        return next;
+      });
     });
 
 
@@ -1629,22 +1680,26 @@ export default function LiveRideMap() {
             </Text>
           </View>
 
-          <View
-            style={styles.liveBadge}
-          >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <View
-              style={
-                styles.liveDot
-              }
-            />
-
-            <Text
-              style={
-                styles.liveText
-              }
+              style={styles.liveBadge}
             >
-              LIVE
-            </Text>
+              <View
+                style={
+                  styles.liveDot
+                }
+              />
+
+              <Text
+                style={
+                  styles.liveText
+                }
+              >
+                LIVE
+              </Text>
+            </View>
+
+            <ProfileHeaderButton size={34} />
           </View>
 
         </View>

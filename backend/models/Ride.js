@@ -85,6 +85,12 @@ const captainLocationSchema = new mongoose.Schema(
 
 const riderSchema = new mongoose.Schema(
   {
+    userId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+
     name: {
       type: String,
       required: true,
@@ -314,6 +320,22 @@ const rideSchema = new mongoose.Schema(
       type: String,
 
       required: true,
+
+      trim: true,
+    },
+
+    captainId: {
+      type: String,
+
+      default: null,
+
+      trim: true,
+    },
+
+    captainUserId: {
+      type: String,
+
+      default: null,
 
       trim: true,
     },

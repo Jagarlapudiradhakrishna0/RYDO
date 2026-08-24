@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { API_URL } from '@/constants/network';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 export default function RoutePlanner() {
   const {
@@ -244,9 +245,7 @@ export default function RoutePlanner() {
             RYDO
           </Text>
 
-          <Text style={styles.headerNumber}>
-            05
-          </Text>
+          <ProfileHeaderButton size={34} />
 
         </View>
 

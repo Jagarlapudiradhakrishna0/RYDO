@@ -426,6 +426,7 @@ router.post(
       const {
         rideCode,
         riderName,
+        userId,
       } = req.body;
 
       if (
@@ -452,6 +453,8 @@ router.post(
           riderName
         ).trim();
 
+      const riderUserId = userId ? String(userId).trim() : null;
+
       if (!name) {
         return res.status(400).json({
           success: false,
@@ -476,27 +479,32 @@ router.post(
         });
       }
 
-      const alreadyJoined =
-        ride.riders.some(
+      const existingRider =
+        ride.riders.find(
           (rider) =>
-            rider.name
-              .toLowerCase() ===
-            name.toLowerCase()
+            (riderUserId && rider.userId && String(rider.userId) === riderUserId) ||
+            rider.name.toLowerCase() === name.toLowerCase()
         );
 
-      if (!alreadyJoined) {
+      if (existingRider) {
+        if (riderUserId && !existingRider.userId) {
+          existingRider.userId = riderUserId;
+        }
+        existingRider.name = name;
+        await ride.save();
+      } else {
         ride.riders.push({
+          userId: riderUserId || new mongoose.Types.ObjectId().toString(),
           name,
-
-          location:
-            null,
+          joinedAt: new Date(),
+          location: null,
         });
 
         await ride.save();
       }
 
       console.log(
-        `RYDO: ${name} joined ride ${ride.rideCode}`
+        `RYDO: ${name} (userId: ${riderUserId}) joined ride ${ride.rideCode}`
       );
 
       return res.json({
@@ -1261,6 +1269,19 @@ router.patch(
         });
       }
 
+      const io = req.app.get('io');
+      if (io) {
+        io.to(rideCode).emit('locationUpdated', {
+          memberId: 'captain-' + String(ride.captainName || 'captain').toLowerCase().replace(/\s+/g, '-'),
+          rideCode,
+          userName: ride.captainName,
+          role: 'captain',
+          latitude: lat,
+          longitude: lng,
+          updatedAt: ride.captainLocation?.updatedAt || new Date().toISOString(),
+        });
+      }
+
       return res.json({
         success: true,
 
@@ -1383,106 +1404,209 @@ router.patch(
       }
 
       /* -----------------------------------------------
-         FIND RIDER
+         FIND RIDER & UPDATE LOCATION
       ----------------------------------------------- */
 
-      const rider =
-        ride.riders.id(
-          riderId
-        );
+      const isObjectId = riderId && riderId.match(/^[0-9a-fA-F]{24}$/);
+      let rider = isObjectId ? ride.riders.id(riderId) : null;
 
       if (!rider) {
-        return res.status(404).json({
-          success: false,
-
-          message:
-            'Rider not found in this ride',
-        });
+        rider = ride.riders.find(
+          (r) => r.name.toLowerCase() === String(riderId).trim().toLowerCase()
+        );
       }
 
-      /* -----------------------------------------------
-         UPDATE LOCATION
-      ----------------------------------------------- */
+      const updatedAt = new Date();
 
-      rider.location = {
-        latitude:
-          lat,
-
-        longitude:
-          lng,
-
-        updatedAt:
-          new Date(),
-      };
+      if (!rider) {
+        // Auto-add rider if not present
+        const newRider = {
+          name: String(riderId).trim(),
+          joinedAt: new Date(),
+          location: {
+            latitude: lat,
+            longitude: lng,
+            updatedAt,
+          },
+        };
+        ride.riders.push(newRider);
+        rider = ride.riders[ride.riders.length - 1];
+      } else {
+        rider.location = {
+          latitude: lat,
+          longitude: lng,
+          updatedAt,
+        };
+      }
 
       await ride.save();
 
-      console.log(
-        '================================'
-      );
+      console.log('================================');
+      console.log('RYDO: RIDER LOCATION UPDATED');
+      console.log('Ride Code:', rideCode);
+      console.log('Rider:', rider.name);
+      console.log('Latitude:', lat);
+      console.log('Longitude:', lng);
+      console.log('================================');
 
-      console.log(
-        'RYDO: RIDER LOCATION UPDATED'
-      );
+      console.log('RYDO LOCATION SAVED:', {
+        rideCode,
+        userId: rider._id.toString(),
+        role: 'rider',
+      });
 
-      console.log(
-        'Ride Code:',
-        rideCode
-      );
-
-      console.log(
-        'Rider:',
-        rider.name
-      );
-
-      console.log(
-        'Latitude:',
-        lat
-      );
-
-      console.log(
-        'Longitude:',
-        lng
-      );
-
-      console.log(
-        '================================'
-      );
-
-      /* -----------------------------------------------
-         RESPONSE
-      ----------------------------------------------- */
+      const io = req.app.get('io');
+      if (io) {
+        io.to(rideCode).emit('locationUpdated', {
+          memberId: rider._id.toString(),
+          rideCode,
+          userName: rider.name,
+          role: 'rider',
+          latitude: lat,
+          longitude: lng,
+          updatedAt: rider.location?.updatedAt ? rider.location.updatedAt.toISOString() : new Date().toISOString(),
+        });
+      }
 
       return res.json({
         success: true,
-
-        message:
-          'Rider location updated',
-
+        message: 'Rider location updated',
         rider: {
-          id:
-            rider._id,
-
-          name:
-            rider.name,
-
-          location:
-            rider.location,
+          id: rider._id,
+          userId: rider._id,
+          name: rider.name,
+          role: 'rider',
+          location: rider.location,
         },
       });
 
     } catch (error) {
-      console.error(
-        'RYDO: Rider location error'
-      );
-
-      console.error(error);
-
+      console.error('RYDO: Rider location error:', error);
       return res.status(500).json({
         success: false,
+        message: 'Failed to update rider location',
+      });
+    }
+  }
+);
 
-        message:
-          'Failed to update rider location',
+/* =====================================================
+   UPDATE RIDER LOCATION BY NAME / USERID
+   PATCH /api/rides/:rideCode/rider-location
+===================================================== */
+
+router.patch(
+  '/:rideCode/rider-location',
+  async (req, res) => {
+    try {
+      const rideCode = String(req.params.rideCode).toUpperCase().trim();
+      const { riderName, userId, latitude, longitude } = req.body;
+
+      const lat = Number(latitude);
+      const lng = Number(longitude);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid latitude and longitude are required',
+        });
+      }
+
+      if (!riderName && !userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rider name or userId is required',
+        });
+      }
+
+      const name = String(riderName || '').trim();
+      const rUserId = userId ? String(userId).trim() : null;
+      const isObjectId = rUserId && rUserId.match(/^[0-9a-fA-F]{24}$/);
+      const updatedAt = new Date();
+
+      const rideDoc = await Ride.findOne({ rideCode });
+      if (!rideDoc) {
+        return res.status(404).json({
+          success: false,
+          message: 'Ride not found',
+        });
+      }
+
+      let rider = (rideDoc.riders || []).find(
+        (r) =>
+          (rUserId && r.userId && String(r.userId) === String(rUserId)) ||
+          (isObjectId && r._id && r._id.toString() === String(rUserId)) ||
+          (name && r.name && r.name.toLowerCase() === name.toLowerCase())
+      );
+
+      if (!rider) {
+        rideDoc.riders.push({
+          userId: rUserId,
+          name: name || 'Rider',
+          joinedAt: new Date(),
+          location: {
+            latitude: lat,
+            longitude: lng,
+            updatedAt,
+          },
+        });
+      } else {
+        rider.location = {
+          latitude: lat,
+          longitude: lng,
+          updatedAt,
+        };
+        if (rUserId && !rider.userId) {
+          rider.userId = rUserId;
+        }
+      }
+
+      await rideDoc.save();
+
+      const finalUserId = rUserId || name;
+
+      console.log('RYDO LOCATION UPDATE:', {
+        userId: finalUserId,
+        role: 'rider',
+        rideCode,
+        latitude: lat,
+        longitude: lng,
+      });
+
+      console.log('RYDO LOCATION SAVED:', {
+        userId: finalUserId,
+        role: 'rider',
+        rideCode,
+      });
+
+      const io = req.app.get('io');
+      if (io) {
+        io.to(rideCode).emit('locationUpdated', {
+          userId: finalUserId,
+          memberId: finalUserId,
+          rideCode,
+          userName: name || 'Rider',
+          role: 'rider',
+          latitude: lat,
+          longitude: lng,
+          updatedAt: updatedAt.toISOString(),
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Rider location updated',
+        location: {
+          latitude: lat,
+          longitude: lng,
+          updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error('RYDO: Rider location error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to update rider location',
       });
     }
   }
@@ -1494,7 +1618,7 @@ router.patch(
 
    Returns:
    - Captain location
-   - Every rider location
+   - Every rider location (with location: null if no location yet)
 ===================================================== */
 
 router.get(
@@ -1516,78 +1640,86 @@ router.get(
       if (!ride) {
         return res.status(404).json({
           success: false,
-
-          message:
-            'Ride not found',
+          message: 'Ride not found',
         });
       }
 
-      const riders =
-        ride.riders
-          .filter(
-            (rider) =>
-              rider.location &&
-              Number.isFinite(
-                Number(
-                  rider.location.latitude
-                )
-              ) &&
-              Number.isFinite(
-                Number(
-                  rider.location.longitude
-                )
-              )
-          )
-          .map(
-            (rider) => ({
-              id:
-                rider._id,
+      const riders = (ride.riders || []).map((rider) => {
+        const hasLoc =
+          rider.location &&
+          Number.isFinite(Number(rider.location.latitude)) &&
+          Number.isFinite(Number(rider.location.longitude));
 
-              name:
-                rider.name,
+        const rUserId = rider.userId || rider._id.toString();
 
-              location:
-                rider.location,
-            })
-          );
+        return {
+          userId: rUserId,
+          id: rUserId,
+          _id: rider._id.toString(),
+          name: rider.name,
+          role: 'rider',
+          location: hasLoc
+            ? {
+                latitude: Number(rider.location.latitude),
+                longitude: Number(rider.location.longitude),
+                updatedAt: rider.location.updatedAt,
+              }
+            : null,
+        };
+      });
+
+      const hasCaptainLocation =
+        ride.captainLocation &&
+        Number.isFinite(Number(ride.captainLocation.latitude)) &&
+        Number.isFinite(Number(ride.captainLocation.longitude));
+
+      const captain = {
+        userId: ride.captainId || ride.captainUserId || 'captain',
+        name: ride.captainName,
+        role: 'captain',
+        location: hasCaptainLocation
+          ? {
+              latitude: Number(ride.captainLocation.latitude),
+              longitude: Number(ride.captainLocation.longitude),
+              updatedAt: ride.captainLocation.updatedAt,
+            }
+          : null,
+      };
+
+      const validRidersWithLocation = riders.filter((r) => r.location !== null).length;
+      const totalLocations =
+        (hasCaptainLocation ? 1 : 0) + validRidersWithLocation;
+
+      // Required log per spec
+      console.log('RYDO LIVE LOCATIONS:');
+      console.log(
+        JSON.stringify(
+          {
+            captain,
+            rideCode: ride.rideCode,
+            riders,
+            success: true,
+            totalLocations: totalLocations > 0 ? totalLocations : (riders.length + (hasCaptainLocation ? 1 : 0)),
+          },
+          null,
+          2
+        )
+      );
 
       return res.json({
         success: true,
-
-        rideCode:
-          ride.rideCode,
-
-        captain: {
-          name:
-            ride.captainName,
-
-          location:
-            ride.captainLocation,
-        },
-
+        rideCode: ride.rideCode,
+        captain,
+        captainLocation: captain.location,
         riders,
-
-        totalLocations:
-          riders.length +
-          (
-            ride.captainLocation
-              ? 1
-              : 0
-          ),
+        totalLocations: totalLocations > 0 ? totalLocations : (riders.length + (hasCaptainLocation ? 1 : 0)),
       });
 
     } catch (error) {
-      console.error(
-        'RYDO: Get live locations error'
-      );
-
-      console.error(error);
-
+      console.error('RYDO: Get live locations error:', error);
       return res.status(500).json({
         success: false,
-
-        message:
-          'Failed to get live locations',
+        message: 'Failed to get live locations',
       });
     }
   }

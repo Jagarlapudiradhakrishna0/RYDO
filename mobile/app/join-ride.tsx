@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 /* =====================================================
    BACKEND
@@ -89,6 +90,8 @@ export default function JoinRide() {
          BACKEND REQUEST
       --------------------------------------------- */
 
+      const currentUserId = currentUser?._id || null;
+
       const response = await fetch(
         `${API_URL}/api/rides/join`,
         {
@@ -102,6 +105,7 @@ export default function JoinRide() {
           body: JSON.stringify({
             rideCode: code,
             riderName: name,
+            userId: currentUserId,
           }),
         }
       );
@@ -154,11 +158,19 @@ export default function JoinRide() {
          OPEN RIDER DASHBOARD
       --------------------------------------------- */
 
+      const joinedRider = (data.ride?.riders || []).find(
+        (r: any) =>
+          (currentUserId && (r.userId === currentUserId || r._id === currentUserId)) ||
+          r.name?.toLowerCase() === name.toLowerCase()
+      );
+      const finalRiderId = joinedRider?._id || joinedRider?.userId || currentUserId || '';
+
       router.replace({
         pathname: '/rider-dashboard',
         params: {
           rideCode: code,
           riderName: name,
+          userId: finalRiderId,
 
           rideName:
             data.ride?.rideName || '',
@@ -216,29 +228,29 @@ export default function JoinRide() {
 
         <View style={styles.header}>
 
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() => router.back()}
-            style={styles.backButton}
-          >
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.back()}
+              style={styles.backButton}
+            >
+              <Text style={styles.backArrow}>
+                ←
+              </Text>
+            </TouchableOpacity>
 
-            <Text style={styles.backArrow}>
-              ←
-            </Text>
+            <View>
+              <Text style={styles.brand}>
+                RYDO
+              </Text>
 
-          </TouchableOpacity>
-
-          <View>
-
-            <Text style={styles.brand}>
-              RYDO
-            </Text>
-
-            <Text style={styles.mode}>
-              RIDER MODE
-            </Text>
-
+              <Text style={styles.mode}>
+                RIDER MODE
+              </Text>
+            </View>
           </View>
+
+          <ProfileHeaderButton size={34} />
 
         </View>
 
@@ -460,8 +472,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     borderBottomWidth: 1,
     borderBottomColor: '#171717',
+  },
+
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 
   backButton: {

@@ -394,6 +394,264 @@ router.get('/profile/:userId', async (req, res) => {
 });
 
 /* =====================================================
+   UPDATE USER PROFILE
+   PATCH /api/auth/profile/:userId
+===================================================== */
+
+router.patch('/profile/:userId', async (req, res) => {
+  console.log('RYDO: PATCH /api/auth/profile/' + req.params.userId + ' HIT');
+
+  try {
+    const { userId } = req.params;
+
+    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format.',
+      });
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User profile not found.',
+      });
+    }
+
+    const {
+      name,
+      email,
+      bikeNumber,
+      bloodGroup,
+      nativePlace,
+      emergencyContactName,
+      emergencyContactPhone,
+      emergencyContactConsent,
+      profilePhoto,
+    } = req.body;
+
+    /* -------------------------------------------------
+       VALIDATION & UPDATES
+    ------------------------------------------------- */
+
+    if (name !== undefined) {
+      const trimmedName = String(name || '').trim();
+      if (!trimmedName || trimmedName.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter your full name (at least 2 characters).',
+        });
+      }
+      user.name = trimmedName;
+    }
+
+    if (email !== undefined) {
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid email address.',
+        });
+      }
+
+      if (normalizedEmail !== user.email) {
+        const existingEmail = await User.findOne({
+          email: normalizedEmail,
+          _id: { $ne: user._id },
+        });
+        if (existingEmail) {
+          return res.status(409).json({
+            success: false,
+            message: 'This email address is already in use by another account.',
+          });
+        }
+        user.email = normalizedEmail;
+      }
+    }
+
+    if (bikeNumber !== undefined) {
+      if (!bikeNumber || !isValidBikeNumber(bikeNumber)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid bike registration number (e.g. TS 09 AB 1234).',
+        });
+      }
+      user.bikeNumber = normalizeBikeNumber(bikeNumber);
+    }
+
+    if (bloodGroup !== undefined) {
+      const normalizedBloodGroup = String(bloodGroup || '').trim().toUpperCase();
+      if (!VALID_BLOOD_GROUPS.includes(normalizedBloodGroup)) {
+        return res.status(400).json({
+          success: false,
+          message: `Please select a valid blood group (${VALID_BLOOD_GROUPS.join(', ')}).`,
+        });
+      }
+      user.bloodGroup = normalizedBloodGroup;
+    }
+
+    if (nativePlace !== undefined) {
+      const trimmedNativePlace = String(nativePlace || '').trim();
+      if (!trimmedNativePlace) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter your native place or city.',
+        });
+      }
+      user.nativePlace = trimmedNativePlace;
+    }
+
+    if (emergencyContactName !== undefined || emergencyContactPhone !== undefined) {
+      const currentEmContact = user.emergencyContact || {};
+      const emName = emergencyContactName !== undefined ? emergencyContactName : currentEmContact.name;
+      const emPhone = emergencyContactPhone !== undefined ? emergencyContactPhone : currentEmContact.phoneNumber;
+
+      const trimmedEmName = String(emName || '').trim();
+      if (!trimmedEmName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter the name of your emergency contact.',
+        });
+      }
+
+      if (!emPhone || !isValidIndianPhone(emPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please enter a valid 10-digit emergency contact phone number.',
+        });
+      }
+
+      user.emergencyContact = {
+        name: trimmedEmName,
+        phoneNumber: '+91' + normalizePhoneNumber(emPhone),
+      };
+    }
+
+    if (emergencyContactConsent !== undefined) {
+      const consentBool = Boolean(emergencyContactConsent);
+      user.emergencyContactConsent = consentBool;
+      if (consentBool && !user.emergencyContactConsentAt) {
+        user.emergencyContactConsentAt = new Date();
+      }
+    }
+
+    if (profilePhoto !== undefined) {
+      user.profilePhoto = profilePhoto || null;
+    }
+
+    await user.save();
+
+    console.log('RYDO: User profile updated successfully for:', user.email);
+
+    return res.json({
+      success: true,
+      message: 'Profile updated successfully!',
+      user: user.toSafeObject(),
+    });
+  } catch (error) {
+    console.error('RYDO: Profile update error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update profile. Please try again.',
+    });
+  }
+});
+
+/* =====================================================
+   CHANGE PASSWORD
+   POST /api/auth/change-password/:userId
+===================================================== */
+
+router.post('/change-password/:userId', async (req, res) => {
+  console.log('RYDO: POST /api/auth/change-password/' + req.params.userId + ' HIT');
+
+  try {
+    const { userId } = req.params;
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!userId || !userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format.',
+      });
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found.',
+      });
+    }
+
+    if (!currentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter your current password.',
+      });
+    }
+
+    const isMatch = verifyPassword(
+      currentPassword,
+      user.passwordSalt,
+      user.passwordHash
+    );
+
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: 'The current password you entered is incorrect.',
+      });
+    }
+
+    if (!newPassword || String(newPassword).length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 8 characters long.',
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New passwords do not match. Please re-enter.',
+      });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be different from your current password.',
+      });
+    }
+
+    const newSalt = generateSalt();
+    const newHash = hashPassword(newPassword, newSalt);
+
+    user.passwordSalt = newSalt;
+    user.passwordHash = newHash;
+
+    await user.save();
+
+    console.log('RYDO: Password changed successfully for user:', user.email);
+
+    return res.json({
+      success: true,
+      message: 'Password changed successfully!',
+    });
+  } catch (error) {
+    console.error('RYDO: Password change error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to change password. Please try again.',
+    });
+  }
+});
+
+/* =====================================================
    EXPORT
 ===================================================== */
 

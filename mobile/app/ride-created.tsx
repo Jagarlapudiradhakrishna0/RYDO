@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
+import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
 export default function RideCreatedScreen() {
   const { rideName, captainName, rideCode } = useLocalSearchParams<{
@@ -62,9 +63,7 @@ export default function RideCreatedScreen() {
             RYDO
           </Text>
 
-          <Text style={styles.headerNumber}>
-            04
-          </Text>
+          <ProfileHeaderButton size={34} />
 
         </View>
 
