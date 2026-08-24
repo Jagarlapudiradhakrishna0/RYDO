@@ -949,7 +949,12 @@ export default function RiderDashboard() {
   }, [
     route.start?.latitude,
     route.start?.longitude,
-    route.stops,
+    JSON.stringify(
+      (route.stops || []).map((s) => ({
+        lat: s.latitude,
+        lng: s.longitude,
+      }))
+    ),
     route.destination?.latitude,
     route.destination?.longitude,
   ]);

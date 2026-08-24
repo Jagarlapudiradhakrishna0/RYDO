@@ -1391,6 +1391,25 @@ export default function CaptainDashboard() {
       }
     );
 
+    socket.on('userLeft', (payload: any) => {
+      console.log('RYDO: userLeft received on captain:', payload);
+      if (!payload) return;
+      const leftId = payload.memberId || payload.userId || payload.userName;
+      if (leftId) {
+        delete lastKnownRiderLocationsRef.current[String(leftId)];
+        if (payload.userName) {
+          delete lastKnownRiderLocationsRef.current[payload.userName.toLowerCase()];
+        }
+        setRiders((prev) =>
+          prev.filter(
+            (r) =>
+              (!r._id || String(r._id) !== String(leftId)) &&
+              (!r.name || r.name !== payload.userName)
+          )
+        );
+      }
+    });
+
     socket.on(
       'disconnect',
       () => {
@@ -2910,6 +2929,26 @@ export default function CaptainDashboard() {
                     RIDER MARKERS
                 ========================================= */}
 
+                {(() => {
+                  const ridersWithValidLoc = riders.filter(
+                    (r) => r.location && Number.isFinite(Number(r.location.latitude)) && Number.isFinite(Number(r.location.longitude))
+                  );
+                  console.log(
+                    '[CAPTAIN MAP] rendering rider markers:',
+                    riders.map((r) => ({
+                      userId: r._id,
+                      name: r.name,
+                      latitude: r.location?.latitude,
+                      longitude: r.location?.longitude,
+                    }))
+                  );
+                  console.log(
+                    '[CAPTAIN MAP] total rider locations:',
+                    ridersWithValidLoc.length
+                  );
+                  return null;
+                })()}
+
                 {riders.map(
                   (
                     rider,
@@ -2939,8 +2978,8 @@ export default function CaptainDashboard() {
                         identifier={`rider-${rider._id || rider.name || index}`}
 
                         coordinate={{
-                          latitude: rider.location.latitude,
-                          longitude: rider.location.longitude,
+                          latitude: Number(rider.location.latitude),
+                          longitude: Number(rider.location.longitude),
                         }}
 
                         title={rider.name}
@@ -2949,7 +2988,7 @@ export default function CaptainDashboard() {
 
                         onPress={() => setSelectedRider(rider)}
 
-                        tracksViewChanges={false}
+                        tracksViewChanges={true}
 
                         zIndex={isSelected ? 50 : 25}
                       >

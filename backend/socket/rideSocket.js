@@ -454,9 +454,38 @@ function initializeRideSocket(io) {
 
         console.log(`RYDO: ${userName} left ride ${rideCode}`);
 
+        // Clear in-memory rider location
+        const roomState = rooms.get(rideCode);
+        if (roomState) {
+          if (memberId) roomState.riderLocations.delete(memberId);
+          for (const [key, val] of roomState.riderLocations.entries()) {
+            if (val.userName?.toLowerCase() === userName?.toLowerCase() || val.userId === memberId) {
+              roomState.riderLocations.delete(key);
+            }
+          }
+        }
+
+        // Clear persisted live location in MongoDB
+        if (role === 'rider' && userName) {
+          Ride.findOne({ rideCode }).then((rDoc) => {
+            if (rDoc && Array.isArray(rDoc.riders)) {
+              const r = rDoc.riders.find(
+                (m) =>
+                  (memberId && (m.userId === memberId || m._id?.toString() === memberId)) ||
+                  m.name?.toLowerCase() === userName.toLowerCase()
+              );
+              if (r) {
+                r.location = null;
+                rDoc.save().catch(() => {});
+              }
+            }
+          }).catch(() => {});
+        }
+
         socket.to(rideCode).emit('userLeft', {
           socketId: socket.id,
           memberId,
+          userId: memberId,
           rideCode,
           userName,
           role,
@@ -465,6 +494,7 @@ function initializeRideSocket(io) {
         socket.leave(rideCode);
         socket.rideCode = null;
         socket.memberId = null;
+        socket.userId = null;
         socket.userName = null;
         socket.role = null;
       } catch (error) {
