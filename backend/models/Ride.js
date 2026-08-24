@@ -225,8 +225,20 @@ const sosEventSchema = new mongoose.Schema(
   {
     riderName: {
       type: String,
-      default: 'Unknown Rider',
+      default: 'Unknown User',
       trim: true,
+    },
+
+    name: {
+      type: String,
+      default: 'Unknown User',
+      trim: true,
+    },
+
+    role: {
+      type: String,
+      enum: ['captain', 'rider'],
+      default: 'rider',
     },
 
     riderId: {

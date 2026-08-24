@@ -34,6 +34,9 @@ import * as Location from 'expo-location';
 
 import { io, Socket } from 'socket.io-client';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
+import { SosButton } from '@/components/SosButton';
+import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
+import { SosEvent } from '@/services/sosService';
 
 import { API_URL } from '@/constants/network';
 
@@ -47,6 +50,11 @@ const OSRM_URL =
 /* =====================================================
    TYPES
 ===================================================== */
+
+type Coordinate = {
+  latitude: number;
+  longitude: number;
+};
 
 type RiderLocation = {
   latitude: number;
@@ -244,6 +252,11 @@ export default function CaptainDashboard() {
   // Monotonically increasing fetch sequence number
   // Prevents stale responses from overwriting newer state
   const fetchSeqRef = useRef(0);
+
+  // SOS Emergency States
+  const [activeSosEvent, setActiveSosEvent] = useState<SosEvent | null>(null);
+  const [sosOverlayVisible, setSosOverlayVisible] = useState<boolean>(false);
+  const [emergencyRoute, setEmergencyRoute] = useState<Coordinate[]>([]);
 
   /* ===================================================
      PARAMS
@@ -792,6 +805,19 @@ export default function CaptainDashboard() {
             longitude: Number(captainLoc.longitude),
             updatedAt: captainLoc.updatedAt,
           });
+        }
+
+        // Active SOS recovery
+        if (Array.isArray(data.activeSos) && data.activeSos.length > 0) {
+          const latestSos = data.activeSos[data.activeSos.length - 1];
+          const lat = Number(latestSos.location?.latitude ?? latestSos.latitude);
+          const lng = Number(latestSos.location?.longitude ?? latestSos.longitude);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            setActiveSosEvent({
+              ...latestSos,
+              location: { latitude: lat, longitude: lng },
+            });
+          }
         }
       } catch (error) {
         console.log('RYDO: Rider locations error:', error);
@@ -1368,6 +1394,24 @@ export default function CaptainDashboard() {
             // Rider not yet in state — add them directly from socket
             return [...currentRiders, updatedRider];
           });
+
+          // Live SOS location tracking
+          setActiveSosEvent((currentSos) => {
+            if (!currentSos) return null;
+            const matches =
+              (memberKey && currentSos.userId && String(currentSos.userId) === String(memberKey)) ||
+              (rName && currentSos.name && currentSos.name.toLowerCase() === rName.toLowerCase());
+            if (matches) {
+              console.log('[SOS LIVE UPDATE] Moving SOS marker for:', rName, { latitude, longitude });
+              return {
+                ...currentSos,
+                location: newLocation,
+                latitude,
+                longitude,
+              };
+            }
+            return currentSos;
+          });
         }
 
         /* =============================================
@@ -1410,6 +1454,45 @@ export default function CaptainDashboard() {
       }
     });
 
+    const handleSosEvent = (payload: any) => {
+      console.log('[RYDO SOS] Received on captain:', payload);
+      if (!payload) return;
+      const lat = Number(payload.location?.latitude ?? payload.latitude);
+      const lng = Number(payload.location?.longitude ?? payload.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const event: SosEvent = {
+        eventId: payload.eventId || payload.sosId || String(Date.now()),
+        sosId: payload.sosId || payload.eventId,
+        rideCode: payload.rideCode || rideCode || '',
+        name: payload.name || payload.riderName || 'Ride Member',
+        riderName: payload.riderName || payload.name,
+        role: payload.role || 'rider',
+        userId: payload.userId,
+        bikeNumber: payload.bikeNumber,
+        bloodGroup: payload.bloodGroup,
+        emergencyContact: payload.emergencyContact,
+        location: { latitude: lat, longitude: lng },
+        latitude: lat,
+        longitude: lng,
+        triggeredAt: payload.triggeredAt || payload.createdAt || new Date().toISOString(),
+        createdAt: payload.createdAt || payload.triggeredAt || new Date().toISOString(),
+        status: payload.status || 'active',
+      };
+
+      setActiveSosEvent(event);
+      setSosOverlayVisible(true);
+    };
+
+    socket.on('sosAlert', handleSosEvent);
+    socket.on('sosTriggered', handleSosEvent);
+    socket.on('sosResolved', (data: any) => {
+      console.log('RYDO: SOS resolved on captain:', data);
+      setActiveSosEvent(null);
+      setSosOverlayVisible(false);
+      setEmergencyRoute([]);
+    });
+
     socket.on(
       'disconnect',
       () => {
@@ -1433,11 +1516,12 @@ export default function CaptainDashboard() {
       socket.off('connect');
       socket.off('locationsSnapshot');
       socket.off('locationUpdated');
+      socket.off('userLeft');
+      socket.off('sosAlert', handleSosEvent);
+      socket.off('sosTriggered', handleSosEvent);
+      socket.off('sosResolved');
       socket.off('disconnect');
       socket.off('connect_error');
-      socket.emit(
-        'leaveRide'
-      );
       socket.disconnect();
       socketRef.current = null;
     };
@@ -1817,12 +1901,20 @@ export default function CaptainDashboard() {
 
         setRouteError('');
 
-        const points:
-          RoutePoint[] = [
-            routeData.start,
-            ...routeData.stops,
-            routeData.destination,
-          ];
+        const currentLocPoint: RoutePoint | null = (location || captainLocation)
+          ? {
+              name: 'Current Location',
+              latitude: (location || captainLocation)!.latitude,
+              longitude: (location || captainLocation)!.longitude,
+            }
+          : null;
+
+        const points: RoutePoint[] = [
+          ...(currentLocPoint ? [currentLocPoint] : []),
+          routeData.start,
+          ...routeData.stops,
+          routeData.destination,
+        ];
 
         const coordinates =
           points
@@ -2366,6 +2458,10 @@ export default function CaptainDashboard() {
           true
         );
 
+        socketRef.current?.emit('startRide', {
+          rideCode: displayRideCode,
+        });
+
         router.push({
           pathname:
             '/live-ride-map' as any,
@@ -2424,6 +2520,45 @@ export default function CaptainDashboard() {
           rider.location
         )
     ).length;
+
+  const handleViewSosLocation = async (sos: SosEvent) => {
+    setSosOverlayVisible(false);
+    const sosLat = sos.location?.latitude ?? sos.latitude;
+    const sosLng = sos.location?.longitude ?? sos.longitude;
+    if (!sosLat || !sosLng) return;
+
+    // Focus map on the emergency location
+    mapRef.current?.animateToRegion(
+      {
+        latitude: sosLat,
+        longitude: sosLng,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      },
+      1000
+    );
+
+    // Calculate emergency route from current user's location to SOS location
+    const startLat = (location || captainLocation)?.latitude;
+    const startLng = (location || captainLocation)?.longitude;
+    if (startLat && startLng) {
+      try {
+        const url = `${OSRM_URL}/${startLng.toFixed(5)},${startLat.toFixed(5)};${sosLng.toFixed(5)},${sosLat.toFixed(5)}?overview=full&geometries=geojson`;
+        console.log('[RYDO SOS] Calculating emergency route:', url);
+        const res = await fetch(url);
+        const routeJson = await res.json();
+        if (routeJson.routes?.[0]?.geometry?.coordinates) {
+          const coords: Coordinate[] = routeJson.routes[0].geometry.coordinates.map(
+            (c: number[]) => ({ latitude: c[1], longitude: c[0] })
+          );
+          setEmergencyRoute(coords);
+          console.log('[RYDO SOS] Emergency route calculated successfully');
+        }
+      } catch (e) {
+        console.log('RYDO SOS: Emergency route error:', e);
+      }
+    }
+  };
 
   /* ===================================================
      RENDER
@@ -2537,13 +2672,24 @@ export default function CaptainDashboard() {
               styles.rideHeader
             }
           >
-            <Text
-              style={
-                styles.sectionLabel
-              }
-            >
-              CURRENT RIDE
-            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text
+                style={
+                  styles.sectionLabel
+                }
+              >
+                CURRENT RIDE
+              </Text>
+              <SosButton
+                rideCode={displayRideCode}
+                role="captain"
+                userName={displayCaptain}
+                socket={socketRef.current}
+                onSosSent={(sos) => {
+                  setActiveSosEvent(sos);
+                }}
+              />
+            </View>
 
             <Text
               style={
@@ -2877,6 +3023,21 @@ export default function CaptainDashboard() {
                 )}
 
                 {/* =========================================
+                    EMERGENCY SOS ROUTE (RED)
+                ========================================= */}
+
+                {emergencyRoute.length > 1 && (
+                  <Polyline
+                    coordinates={emergencyRoute}
+                    strokeColor="#EF4444"
+                    strokeWidth={6}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={40}
+                  />
+                )}
+
+                {/* =========================================
                     CAPTAIN MARKER
                 ========================================= */}
 
@@ -3042,6 +3203,36 @@ export default function CaptainDashboard() {
                       </Marker>
                     );
                   }
+                )}
+
+                {/* =========================================
+                    ACTIVE SOS EMERGENCY MARKER
+                ========================================= */}
+
+                {activeSosEvent && (
+                  <Marker
+                    key={`sos-marker-${activeSosEvent.eventId || activeSosEvent.userId || 'emergency'}`}
+                    coordinate={{
+                      latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
+                      longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
+                    }}
+                    title={`🚨 SOS: ${activeSosEvent.name || activeSosEvent.riderName}`}
+                    description="EMERGENCY LOCATION • TAP FOR DETAILS"
+                    onPress={() => setSosOverlayVisible(true)}
+                    tracksViewChanges={true}
+                    zIndex={100}
+                  >
+                    <View style={styles.sosMarkerWrapper}>
+                      <View style={styles.sosMarkerOuter}>
+                        <Text style={styles.sosMarkerIcon}>🚨</Text>
+                      </View>
+                      <View style={styles.sosMarkerBadge}>
+                        <Text style={styles.sosMarkerBadgeText} numberOfLines={1}>
+                          SOS • {activeSosEvent.name || activeSosEvent.riderName} ({activeSosEvent.role?.toUpperCase()})
+                        </Text>
+                      </View>
+                    </View>
+                  </Marker>
                 )}
 
                 {/* =========================================
@@ -4041,6 +4232,14 @@ export default function CaptainDashboard() {
             </Text>
           </View>
         </ScrollView>
+
+        <SosEmergencyOverlay
+          visible={sosOverlayVisible}
+          sosEvent={activeSosEvent}
+          currentLocation={location || captainLocation}
+          onViewLocation={handleViewSosLocation}
+          onDismiss={() => setSosOverlayVisible(false)}
+        />
       </View>
     </SafeAreaView>
   );
@@ -4452,6 +4651,53 @@ const styles =
 
       height:
         '100%',
+    },
+
+    /* =================================================
+       SOS EMERGENCY MARKER
+    ================================================= */
+
+    sosMarkerWrapper: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    sosMarkerOuter: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: '#DC2626',
+      borderWidth: 3,
+      borderColor: '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#EF4444',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.8,
+      shadowRadius: 10,
+      elevation: 12,
+    },
+
+    sosMarkerIcon: {
+      fontSize: 20,
+    },
+
+    sosMarkerBadge: {
+      backgroundColor: '#DC2626',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+      marginTop: 4,
+      borderWidth: 1,
+      borderColor: '#FFFFFF',
+      maxWidth: 160,
+    },
+
+    sosMarkerBadgeText: {
+      color: '#FFFFFF',
+      fontSize: 9,
+      fontWeight: '900',
+      letterSpacing: 0.5,
     },
 
     /* =================================================

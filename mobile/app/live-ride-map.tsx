@@ -36,6 +36,8 @@ import { io as SocketIO } from 'socket.io-client';
 import { API_URL, SOCKET_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
+import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
+import { SosEvent } from '@/services/sosService';
 
 /* =====================================================
    OSRM
@@ -149,6 +151,10 @@ export default function LiveRideMap() {
 
   const [mapReady, setMapReady] =
     useState(false);
+
+  // SOS Emergency States
+  const [activeSosEvent, setActiveSosEvent] = useState<SosEvent | null>(null);
+  const [sosOverlayVisible, setSosOverlayVisible] = useState<boolean>(false);
 
 
   /* ===================================================
@@ -529,6 +535,44 @@ export default function LiveRideMap() {
       }
     );
 
+    const handleSosEvent = (payload: any) => {
+      console.log('[RYDO SOS] Received on live-ride-map:', payload);
+      if (!payload) return;
+      const lat = Number(payload.location?.latitude ?? payload.latitude);
+      const lng = Number(payload.location?.longitude ?? payload.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const event: SosEvent = {
+        eventId: payload.eventId || payload.sosId || String(Date.now()),
+        sosId: payload.sosId || payload.eventId,
+        rideCode: payload.rideCode || (rideCode as string) || '',
+        name: payload.name || payload.riderName || 'Ride Member',
+        riderName: payload.riderName || payload.name,
+        role: payload.role || 'rider',
+        userId: payload.userId,
+        bikeNumber: payload.bikeNumber,
+        bloodGroup: payload.bloodGroup,
+        emergencyContact: payload.emergencyContact,
+        location: { latitude: lat, longitude: lng },
+        latitude: lat,
+        longitude: lng,
+        triggeredAt: payload.triggeredAt || payload.createdAt || new Date().toISOString(),
+        createdAt: payload.createdAt || payload.triggeredAt || new Date().toISOString(),
+        status: payload.status || 'active',
+      };
+
+      setActiveSosEvent(event);
+      setSosOverlayVisible(true);
+    };
+
+    socket.on('sosAlert', handleSosEvent);
+    socket.on('sosTriggered', handleSosEvent);
+    socket.on('sosResolved', (data: any) => {
+      console.log('RYDO: SOS resolved on live-ride-map:', data);
+      setActiveSosEvent(null);
+      setSosOverlayVisible(false);
+    });
+
     socket.on('disconnect', (reason: string) => {
       console.log(
         'RYDO: Socket disconnected:',
@@ -546,7 +590,17 @@ export default function LiveRideMap() {
         'RYDO: Cleaning up socket...'
       );
 
-      socket.emit('leaveRide');
+      socket.off('locationsSnapshot');
+      socket.off('locationUpdated');
+      socket.off('userLeft');
+      socket.off('userDisconnected');
+      socket.off('socketError');
+      socket.off('connect_error');
+      socket.off('sosAlert', handleSosEvent);
+      socket.off('sosTriggered', handleSosEvent);
+      socket.off('sosResolved');
+      socket.off('disconnect');
+
       socket.disconnect();
       socketRef.current = null;
     };
@@ -1459,6 +1513,23 @@ export default function LiveRideMap() {
 
       router.back();
     };
+
+  const handleViewSosLocation = (sos: SosEvent) => {
+    setSosOverlayVisible(false);
+    const sosLat = sos.location?.latitude ?? sos.latitude;
+    const sosLng = sos.location?.longitude ?? sos.longitude;
+    if (!sosLat || !sosLng) return;
+
+    mapRef.current?.animateToRegion(
+      {
+        latitude: sosLat,
+        longitude: sosLng,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      },
+      1000
+    );
+  };
 
 
   /* ===================================================
@@ -2734,6 +2805,14 @@ export default function LiveRideMap() {
             ← BACK
           </Text>
         </TouchableOpacity>
+
+        <SosEmergencyOverlay
+          visible={sosOverlayVisible}
+          sosEvent={activeSosEvent}
+          currentLocation={location ? { latitude: location.latitude, longitude: location.longitude } : null}
+          onViewLocation={handleViewSosLocation}
+          onDismiss={() => setSosOverlayVisible(false)}
+        />
 
       </View>
     </SafeAreaView>

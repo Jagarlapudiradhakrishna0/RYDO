@@ -415,15 +415,171 @@ function initializeRideSocket(io) {
 
         const ridersSnapshot = Array.from(roomState.riderLocations.values());
 
+        let activeSosEvents = [];
+        try {
+          const snapshotRide = await Ride.findOne({ rideCode });
+          if (snapshotRide && Array.isArray(snapshotRide.sosEvents)) {
+            activeSosEvents = snapshotRide.sosEvents
+              .filter((e) => e.status === 'active')
+              .map((e) => ({
+                eventId: e._id.toString(),
+                sosId: e._id.toString(),
+                rideCode,
+                name: e.name || e.riderName,
+                riderName: e.riderName || e.name,
+                role: e.role || 'rider',
+                userId: e.userId,
+                bikeNumber: e.bikeNumber,
+                bloodGroup: e.bloodGroup,
+                emergencyContact: e.emergencyContact,
+                location: {
+                  latitude: e.latitude,
+                  longitude: e.longitude,
+                },
+                latitude: e.latitude,
+                longitude: e.longitude,
+                triggeredAt: e.triggeredAt ? new Date(e.triggeredAt).toISOString() : new Date().toISOString(),
+                createdAt: e.triggeredAt ? new Date(e.triggeredAt).toISOString() : new Date().toISOString(),
+                status: e.status,
+              }));
+          }
+        } catch (e) {}
+
         socket.emit('locationsSnapshot', {
           success: true,
           rideCode,
           captainLocation: roomState.captainLocation,
           riders: ridersSnapshot,
+          activeSos: activeSosEvents,
           timestamp: new Date().toISOString(),
         });
       } catch (e) {
         console.error('RYDO: requestLocationSnapshot error:', e);
+      }
+    });
+
+    /* =================================================
+       TRIGGER SOS (SOCKET EVENT)
+       Event: triggerSos
+    ================================================= */
+    socket.on('triggerSos', async (data) => {
+      try {
+        if (!data) return;
+        const rideCode = String(data.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+
+        const lat = Number(data.latitude);
+        const lng = Number(data.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+        const senderName = String(data.name || data.userName || data.riderName || socket.userName || 'Ride Member').trim();
+        const senderRole = String(data.role || socket.role || 'rider').toLowerCase();
+        const senderUserId = data.userId || socket.userId || socket.memberId || null;
+
+        const rideDoc = await Ride.findOne({ rideCode });
+        if (!rideDoc) return;
+
+        let userProfile = null;
+        if (senderUserId && String(senderUserId).match(/^[0-9a-fA-F]{24}$/)) {
+          userProfile = await User.findById(senderUserId);
+        }
+        if (!userProfile && senderName) {
+          userProfile = await User.findOne({ name: new RegExp(`^${senderName}$`, 'i') });
+        }
+
+        const sosEvent = {
+          name: senderName,
+          riderName: senderName,
+          role: senderRole,
+          userId: userProfile ? String(userProfile._id) : senderUserId,
+          bikeNumber: userProfile?.bikeNumber || null,
+          bloodGroup: userProfile?.bloodGroup || null,
+          emergencyContact: userProfile?.emergencyContact
+            ? {
+                name: userProfile.emergencyContact.name,
+                phoneNumber: userProfile.emergencyContact.phoneNumber,
+              }
+            : { name: null, phoneNumber: null },
+          status: 'active',
+          latitude: lat,
+          longitude: lng,
+          triggeredAt: new Date(),
+        };
+
+        rideDoc.sosEvents.push(sosEvent);
+        await rideDoc.save();
+
+        const savedEvent = rideDoc.sosEvents[rideDoc.sosEvents.length - 1];
+        const sosPayload = {
+          eventId: savedEvent._id.toString(),
+          sosId: savedEvent._id.toString(),
+          rideCode,
+          name: senderName,
+          riderName: senderName,
+          role: senderRole,
+          userId: sosEvent.userId,
+          bikeNumber: sosEvent.bikeNumber,
+          bloodGroup: sosEvent.bloodGroup,
+          emergencyContact: sosEvent.emergencyContact,
+          location: {
+            latitude: lat,
+            longitude: lng,
+          },
+          latitude: lat,
+          longitude: lng,
+          triggeredAt: sosEvent.triggeredAt.toISOString(),
+          createdAt: sosEvent.triggeredAt.toISOString(),
+          status: 'active',
+        };
+
+        console.log('[RYDO SOS] Saved:', sosPayload.eventId);
+        console.log('[RYDO SOS] Broadcast:', {
+          rideCode,
+          name: senderName,
+          role: senderRole,
+          lat,
+          lng,
+        });
+
+        io.to(rideCode).emit('sosAlert', sosPayload);
+        io.to(rideCode).emit('sosTriggered', sosPayload);
+      } catch (err) {
+        console.error('RYDO: triggerSos socket error:', err);
+      }
+    });
+
+    /* =================================================
+       START / END RIDE
+    ================================================= */
+    socket.on('startRide', async (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+        console.log(`[RIDESTART] Socket startRide received for ${rideCode}`);
+        await Ride.findOneAndUpdate(
+          { rideCode },
+          { $set: { isStarted: true, status: 'live' } }
+        );
+        io.to(rideCode).emit('ride:started', { rideCode, isStarted: true, status: 'live' });
+        io.to(rideCode).emit('rideStarted', { rideCode, isStarted: true, status: 'live' });
+      } catch (err) {
+        console.error('RYDO: startRide socket error:', err);
+      }
+    });
+
+    socket.on('endRide', async (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+        console.log(`[RIDESTART] Socket endRide received for ${rideCode}`);
+        await Ride.findOneAndUpdate(
+          { rideCode },
+          { $set: { isStarted: false, status: 'ended' } }
+        );
+        io.to(rideCode).emit('ride:ended', { rideCode, isStarted: false, status: 'ended' });
+        io.to(rideCode).emit('rideEnded', { rideCode, isStarted: false, status: 'ended' });
+      } catch (err) {
+        console.error('RYDO: endRide socket error:', err);
       }
     });
 

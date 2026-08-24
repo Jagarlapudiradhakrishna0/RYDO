@@ -672,6 +672,19 @@ router.patch(
         });
       }
 
+      const io = req.app.get('io');
+      if (io) {
+        if (started) {
+          console.log('[RIDESTART] rideCode:', rideCode, 'started: true');
+          io.to(rideCode).emit('ride:started', { rideCode, isStarted: true, status: 'live', ride });
+          io.to(rideCode).emit('rideStarted', { rideCode, isStarted: true, status: 'live', ride });
+        } else {
+          console.log('[RIDESTART] rideCode:', rideCode, 'started: false');
+          io.to(rideCode).emit('ride:ended', { rideCode, isStarted: false, status: 'ended', ride });
+          io.to(rideCode).emit('rideEnded', { rideCode, isStarted: false, status: 'ended', ride });
+        }
+      }
+
       return res.json({
         success: true,
 
@@ -1751,7 +1764,9 @@ router.post(
           .trim();
 
       const {
+        name,
         riderName,
+        role,
         riderId,
         userId,
         latitude,
@@ -1762,20 +1777,16 @@ router.post(
          VALIDATE
       ------------------------------------------- */
 
-      if (!riderName) {
+      const senderName = String(name || riderName || '').trim();
+      if (!senderName) {
         return res.status(400).json({
           success: false,
-
-          message:
-            'Rider name is required for SOS',
+          message: 'Name is required for SOS',
         });
       }
 
-      const lat =
-        Number(latitude);
-
-      const lng =
-        Number(longitude);
+      const lat = Number(latitude);
+      const lng = Number(longitude);
 
       if (
         !Number.isFinite(lat) ||
@@ -1783,9 +1794,7 @@ router.post(
       ) {
         return res.status(400).json({
           success: false,
-
-          message:
-            'Valid latitude and longitude are required for SOS',
+          message: 'Valid latitude and longitude are required for SOS',
         });
       }
 
@@ -1801,11 +1810,14 @@ router.post(
       if (!ride) {
         return res.status(404).json({
           success: false,
-
-          message:
-            'Ride not found',
+          message: 'Ride not found',
         });
       }
+
+      const senderRole = String(
+        role ||
+        (ride.captainName?.toLowerCase() === senderName.toLowerCase() ? 'captain' : 'rider')
+      ).toLowerCase();
 
       /* -------------------------------------------
          SECURELY RETRIEVE USER PROFILE (FROM DB)
@@ -1813,13 +1825,13 @@ router.post(
 
       let userProfile = null;
 
-      if (userId && userId.match(/^[0-9a-fA-F]{24}$/)) {
+      if (userId && String(userId).match(/^[0-9a-fA-F]{24}$/)) {
         userProfile = await User.findById(userId);
       }
 
-      if (!userProfile && riderName) {
+      if (!userProfile && senderName) {
         userProfile = await User.findOne({
-          name: new RegExp(`^${riderName.trim()}$`, 'i'),
+          name: new RegExp(`^${senderName.trim()}$`, 'i'),
         });
       }
 
@@ -1837,34 +1849,21 @@ router.post(
       ------------------------------------------- */
 
       const sosEvent = {
-        riderName:
-          String(riderName).trim(),
-
-        riderId:
-          riderId || null,
-
-        userId:
-          userProfile ? String(userProfile._id) : (userId || null),
-
+        name: senderName,
+        riderName: senderName,
+        role: senderRole,
+        riderId: riderId || null,
+        userId: userProfile ? String(userProfile._id) : (userId || null),
         bikeNumber,
-
         bloodGroup,
-
         emergencyContact,
-
-        status:
-          'active',
-
+        status: 'active',
         latitude: lat,
-
         longitude: lng,
-
-        triggeredAt:
-          new Date(),
+        triggeredAt: new Date(),
       };
 
       ride.sosEvents.push(sosEvent);
-
       await ride.save();
 
       /* -------------------------------------------
@@ -1876,154 +1875,122 @@ router.post(
           ride.sosEvents.length - 1
         ];
 
-      const io =
-        req.app.get('io');
+      const sosPayload = {
+        eventId: savedEvent._id.toString(),
+        sosId: savedEvent._id.toString(),
+        rideCode,
+        name: senderName,
+        riderName: senderName,
+        role: senderRole,
+        userId: sosEvent.userId,
+        bikeNumber: sosEvent.bikeNumber,
+        bloodGroup: sosEvent.bloodGroup,
+        emergencyContact: sosEvent.emergencyContact,
+        location: {
+          latitude: lat,
+          longitude: lng,
+        },
+        latitude: lat,
+        longitude: lng,
+        triggeredAt: sosEvent.triggeredAt.toISOString(),
+        createdAt: sosEvent.triggeredAt.toISOString(),
+        status: 'active',
+      };
 
+      const io = req.app.get('io');
       if (io) {
-        io
-          .to(rideCode)
-          .emit(
-            'sosAlert',
-            {
-              rideCode,
+        io.to(rideCode).emit('sosAlert', sosPayload);
+        io.to(rideCode).emit('sosTriggered', sosPayload);
 
-              riderName:
-                sosEvent.riderName,
-
-              riderId:
-                sosEvent.riderId,
-
-              userId:
-                sosEvent.userId,
-
-              bikeNumber:
-                sosEvent.bikeNumber,
-
-              bloodGroup:
-                sosEvent.bloodGroup,
-
-              emergencyContact: {
-                name: sosEvent.emergencyContact?.name || null,
-                phoneNumber: sosEvent.emergencyContact?.phoneNumber || null,
-              },
-
-              latitude:
-                sosEvent.latitude,
-
-              longitude:
-                sosEvent.longitude,
-
-              triggeredAt:
-                sosEvent.triggeredAt,
-
-              status:
-                sosEvent.status,
-
-              sosId:
-                savedEvent._id,
-            }
-          );
-
-        console.log(
-          'RYDO: SOS BROADCAST TO RIDE:',
-          rideCode
-        );
+        console.log('[RYDO SOS] Broadcast:', {
+          rideCode,
+          name: senderName,
+          role: senderRole,
+          lat,
+          lng,
+        });
       }
 
-      /* -------------------------------------------
-         LOG
-      ------------------------------------------- */
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: SOS RECEIVED & EMERGENCY ALERT DISPATCHED'
-      );
-
-      console.log(
-        'Ride:',
-        rideCode
-      );
-
-      console.log(
-        'Rider:',
-        sosEvent.riderName
-      );
-
-      if (bikeNumber) {
-        console.log('Bike Number:', bikeNumber);
-      }
-
-      if (bloodGroup) {
-        console.log('Blood Group:', bloodGroup);
-      }
-
-      if (emergencyContact?.name) {
-        console.log('Emergency Contact:', emergencyContact.name, `(${emergencyContact.phoneNumber})`);
-      }
-
-      console.log(
-        'Latitude:',
-        sosEvent.latitude
-      );
-
-      console.log(
-        'Longitude:',
-        sosEvent.longitude
-      );
-
-      console.log(
-        '================================'
-      );
+      console.log('[RYDO SOS] Saved:', sosPayload.eventId);
 
       return res.json({
         success: true,
-
-        message:
-          'SOS sent successfully. Emergency contact and crew alerted.',
-
-        sos: {
-          id:
-            savedEvent._id,
-
-          riderName:
-            sosEvent.riderName,
-
-          bikeNumber:
-            sosEvent.bikeNumber,
-
-          bloodGroup:
-            sosEvent.bloodGroup,
-
-          emergencyContact:
-            sosEvent.emergencyContact,
-
-          latitude:
-            sosEvent.latitude,
-
-          longitude:
-            sosEvent.longitude,
-
-          triggeredAt:
-            sosEvent.triggeredAt,
-        },
+        message: 'SOS sent successfully. Emergency contact and crew alerted.',
+        sos: sosPayload,
       });
 
     } catch (error) {
-      console.error(
-        'RYDO: SOS error'
-      );
-
-      console.error(error);
-
+      console.error('RYDO: SOS error:', error);
       return res.status(500).json({
         success: false,
-
-        message:
-          'Failed to send SOS',
+        message: 'Failed to send SOS',
       });
+    }
+  }
+);
+
+/* =====================================================
+   GET ACTIVE SOS EVENTS
+   GET /api/rides/:rideCode/sos/active
+===================================================== */
+
+router.get(
+  '/:rideCode/sos/active',
+  async (req, res) => {
+    try {
+      const rideCode = String(req.params.rideCode).toUpperCase().trim();
+      const ride = await Ride.findOne({ rideCode });
+      if (!ride) {
+        return res.status(404).json({ success: false, message: 'Ride not found' });
+      }
+      const activeSos = (ride.sosEvents || []).filter((e) => e.status === 'active');
+      return res.json({
+        success: true,
+        rideCode,
+        activeSos,
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: 'Failed to fetch active SOS' });
+    }
+  }
+);
+
+/* =====================================================
+   RESOLVE SOS EVENT
+   PATCH /api/rides/:rideCode/sos/:sosId/resolve
+===================================================== */
+
+router.patch(
+  '/:rideCode/sos/:sosId/resolve',
+  async (req, res) => {
+    try {
+      const rideCode = String(req.params.rideCode).toUpperCase().trim();
+      const { sosId } = req.params;
+      const ride = await Ride.findOne({ rideCode });
+      if (!ride) {
+        return res.status(404).json({ success: false, message: 'Ride not found' });
+      }
+
+      const event =
+        (ride.sosEvents || []).id(sosId) ||
+        (ride.sosEvents || []).find((e) => e._id.toString() === String(sosId));
+
+      if (event) {
+        event.status = 'resolved';
+        await ride.save();
+
+        const io = req.app.get('io');
+        if (io) {
+          io.to(rideCode).emit('sosResolved', {
+            rideCode,
+            sosId,
+          });
+        }
+      }
+
+      return res.json({ success: true, message: 'SOS marked resolved' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: 'Failed to resolve SOS' });
     }
   }
 );
