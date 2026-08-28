@@ -29,6 +29,7 @@ import { API_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 import CommunicationButton from '@/components/CommunicationButton';
+import VoiceButton from '@/components/VoiceButton';
 import { communicationService } from '@/services/communicationService';
 import { socketService } from '@/services/socketService';
 import { SosButton } from '@/components/SosButton';
@@ -2755,6 +2756,13 @@ export default function RiderDashboard() {
 
                   </View>
 
+                  <VoiceButton
+                    rideCode={displayCode}
+                    role="rider"
+                    userName={displayName}
+                    size={28}
+                  />
+
                   <CommunicationButton
                     rideCode={displayCode}
                     role="rider"
@@ -3300,6 +3308,13 @@ export default function RiderDashboard() {
                     </Text>
 
                   </View>
+
+                  <VoiceButton
+                    rideCode={displayCode}
+                    role="rider"
+                    userName={displayName}
+                    size={34}
+                  />
 
                   <CommunicationButton
                     rideCode={displayCode}

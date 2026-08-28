@@ -8,17 +8,24 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
 
-    "ios": {
-      "supportsTablet": true
-    },
-
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE"
       },
       "usesCleartextTraffic": true,
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "RYDO uses your microphone for group voice communication during rides."
+      }
     },
 
     "web": {

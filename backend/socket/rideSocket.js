@@ -20,6 +20,62 @@ const RideMessage = require('../models/RideMessage');
 
 const rideRooms = new Map();
 
+/* =====================================================
+   IN-MEMORY VOICE ROOM STORE
+   voiceRooms: Map<rideCode, {
+     members: Map<socketId, { userName, role, memberId }>,
+     activeSpeaker: socketId | null,
+     activeSpeakerName: string | null,
+   }>
+===================================================== */
+
+const voiceRooms = new Map();
+
+function getOrCreateVoiceRoom(rideCode) {
+  const code = String(rideCode || '').toUpperCase().trim();
+  if (!voiceRooms.has(code)) {
+    voiceRooms.set(code, {
+      members: new Map(),
+      activeSpeaker: null,
+      activeSpeakerName: null,
+    });
+  }
+  return voiceRooms.get(code);
+}
+
+function getVoiceRoomState(rideCode) {
+  const room = voiceRooms.get(String(rideCode || '').toUpperCase().trim());
+  if (!room) return { members: [], activeSpeaker: null, activeSpeakerName: null };
+  return {
+    members: Array.from(room.members.values()),
+    activeSpeaker: room.activeSpeaker,
+    activeSpeakerName: room.activeSpeakerName,
+  };
+}
+
+function removeFromVoiceRoom(socket) {
+  const rideCode = socket.rideCode;
+  if (!rideCode) return;
+  const room = voiceRooms.get(rideCode);
+  if (!room) return;
+  room.members.delete(socket.id);
+  // Release speaker lock if this socket held it
+  if (room.activeSpeaker === socket.id) {
+    room.activeSpeaker = null;
+    room.activeSpeakerName = null;
+    socket.to(rideCode).emit('voice:available', { rideCode });
+    socket.to(rideCode).emit('voice:speaker', { rideCode, activeSpeaker: null, activeSpeakerName: null });
+  }
+  socket.to(rideCode).emit('voice:member-left', {
+    rideCode,
+    socketId: socket.id,
+    memberId: socket.memberId,
+    userName: socket.userName,
+    role: socket.role,
+    state: getVoiceRoomState(rideCode),
+  });
+}
+
 function getOrCreateRoom(rideCode) {
   const code = String(rideCode || '').toUpperCase().trim();
   if (!rideRooms.has(code)) {
@@ -786,10 +842,219 @@ function initializeRideSocket(io) {
     });
 
     /* =================================================
-       DISCONNECT
+       VOICE COMMUNICATION - SIGNALING
+       Group push-to-talk voice via WebRTC signaling
+    ================================================= */
+
+    /* voice:join — user enters the voice room */
+    socket.on('voice:join', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        const userName = String(data?.userName || socket.userName || 'Unknown');
+        const role = String(data?.role || socket.role || 'rider');
+        const memberId = String(data?.memberId || socket.memberId || socket.id);
+
+        if (!rideCode) return;
+
+        const room = getOrCreateVoiceRoom(rideCode);
+        room.members.set(socket.id, { socketId: socket.id, userName, role, memberId });
+
+        console.log(`[VOICE] ${userName} (${role}) joined voice room ${rideCode}`);
+
+        // Tell new joiner current state + all existing peer socket IDs to initiate offers
+        const currentState = getVoiceRoomState(rideCode);
+        const existingPeers = Array.from(room.members.entries())
+          .filter(([sid]) => sid !== socket.id)
+          .map(([sid, info]) => ({ socketId: sid, ...info }));
+
+        socket.emit('voice:state', {
+          rideCode,
+          state: currentState,
+          peers: existingPeers, // Existing peers to initiate WebRTC offers toward
+        });
+
+        // Notify others that a new peer joined
+        socket.to(rideCode).emit('voice:member-joined', {
+          rideCode,
+          socketId: socket.id,
+          userName,
+          role,
+          memberId,
+          state: currentState,
+        });
+      } catch (err) {
+        console.error('[VOICE] voice:join error:', err);
+      }
+    });
+
+    /* voice:leave — user exits voice room voluntarily */
+    socket.on('voice:leave', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+        removeFromVoiceRoom(socket);
+        console.log(`[VOICE] ${socket.userName} left voice room ${rideCode}`);
+      } catch (err) {
+        console.error('[VOICE] voice:leave error:', err);
+      }
+    });
+
+    /* voice:request — user wants to speak (push-to-talk press) */
+    socket.on('voice:request', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+
+        const room = voiceRooms.get(rideCode);
+        if (!room) {
+          socket.emit('voice:denied', { rideCode, reason: 'Voice room not found. Join voice first.' });
+          return;
+        }
+
+        if (room.activeSpeaker && room.activeSpeaker !== socket.id) {
+          // Someone else is speaking — deny
+          socket.emit('voice:denied', {
+            rideCode,
+            reason: `${room.activeSpeakerName || 'Someone'} is speaking. Please wait.`,
+            activeSpeakerName: room.activeSpeakerName,
+          });
+          return;
+        }
+
+        // Grant speaker lock
+        room.activeSpeaker = socket.id;
+        room.activeSpeakerName = socket.userName || data?.userName || 'Unknown';
+
+        socket.emit('voice:granted', { rideCode });
+
+        // Broadcast to everyone that this person is now speaking
+        io.to(rideCode).emit('voice:speaker', {
+          rideCode,
+          activeSpeaker: socket.id,
+          activeSpeakerName: room.activeSpeakerName,
+          memberId: socket.memberId,
+        });
+
+        console.log(`[VOICE] ${room.activeSpeakerName} acquired speaker lock in ${rideCode}`);
+      } catch (err) {
+        console.error('[VOICE] voice:request error:', err);
+      }
+    });
+
+    /* voice:release — user releases push-to-talk */
+    socket.on('voice:release', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode) return;
+
+        const room = voiceRooms.get(rideCode);
+        if (!room) return;
+
+        if (room.activeSpeaker !== socket.id) return; // Only current speaker can release
+
+        const prevSpeakerName = room.activeSpeakerName;
+        room.activeSpeaker = null;
+        room.activeSpeakerName = null;
+
+        io.to(rideCode).emit('voice:speaker', {
+          rideCode,
+          activeSpeaker: null,
+          activeSpeakerName: null,
+        });
+        io.to(rideCode).emit('voice:available', { rideCode });
+
+        console.log(`[VOICE] ${prevSpeakerName} released speaker lock in ${rideCode}`);
+      } catch (err) {
+        console.error('[VOICE] voice:release error:', err);
+      }
+    });
+
+    /* voice:offer — WebRTC SDP offer forwarded to specific peer */
+    socket.on('voice:offer', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        const targetSocketId = data?.targetSocketId;
+        if (!rideCode || !targetSocketId || !data?.sdp) return;
+
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (!targetSocket) {
+          socket.emit('voice:error', { error: 'Target peer not found', targetSocketId });
+          return;
+        }
+
+        targetSocket.emit('voice:offer', {
+          rideCode,
+          fromSocketId: socket.id,
+          fromUserName: socket.userName,
+          fromRole: socket.role,
+          sdp: data.sdp,
+        });
+      } catch (err) {
+        console.error('[VOICE] voice:offer error:', err);
+      }
+    });
+
+    /* voice:answer — WebRTC SDP answer forwarded back */
+    socket.on('voice:answer', (data) => {
+      try {
+        const targetSocketId = data?.targetSocketId;
+        if (!targetSocketId || !data?.sdp) return;
+
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (!targetSocket) return;
+
+        targetSocket.emit('voice:answer', {
+          rideCode: data.rideCode,
+          fromSocketId: socket.id,
+          fromUserName: socket.userName,
+          sdp: data.sdp,
+        });
+      } catch (err) {
+        console.error('[VOICE] voice:answer error:', err);
+      }
+    });
+
+    /* voice:ice-candidate — ICE candidate forwarded to peer */
+    socket.on('voice:ice-candidate', (data) => {
+      try {
+        const targetSocketId = data?.targetSocketId;
+        if (!targetSocketId || !data?.candidate) return;
+
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (!targetSocket) return;
+
+        targetSocket.emit('voice:ice-candidate', {
+          rideCode: data.rideCode,
+          fromSocketId: socket.id,
+          candidate: data.candidate,
+        });
+      } catch (err) {
+        console.error('[VOICE] voice:ice-candidate error:', err);
+      }
+    });
+
+    /* voice:state — request current voice room state */
+    socket.on('voice:state', (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        socket.emit('voice:state', {
+          rideCode,
+          state: getVoiceRoomState(rideCode),
+          peers: [],
+        });
+      } catch (err) {
+        console.error('[VOICE] voice:state error:', err);
+      }
+    });
+
+    /* =================================================
+       DISCONNECT (with voice cleanup)
     ================================================= */
     socket.on('disconnect', (reason) => {
       console.log(`RYDO: Socket disconnected (${socket.id}): ${reason}`);
+
+      // Voice room cleanup on disconnect
+      removeFromVoiceRoom(socket);
 
       if (socket.rideCode) {
         socket.to(socket.rideCode).emit('userDisconnected', {
