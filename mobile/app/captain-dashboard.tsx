@@ -32,7 +32,7 @@ import MapView, {
 
 import * as Location from 'expo-location';
 
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 import CommunicationButton from '@/components/CommunicationButton';
 import VoiceButton from '@/components/VoiceButton';
