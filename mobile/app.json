@@ -9,6 +9,11 @@
     "newArchEnabled": true,
     "android": {
       "package": "com.rydov1.mobile",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDummyKeyForMapsInitializationToPreventCrash"
+        }
+      },
       "adaptiveIcon": {
         "backgroundColor": "#000000"
       },
