@@ -17,25 +17,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { socketService } from '@/services/socketService';
 import { getCurrentUser } from '@/constants/auth';
 
-/* =====================================================
-   WEBRTC AVAILABILITY CHECK
-   react-native-webrtc requires a native build.
-   Gracefully degrade if not available.
-===================================================== */
-let voiceService: any = null;
-let isWebRTCAvailable = false;
+import { voiceService, isWebRTCSupported, VoiceMember, VoiceRoomState } from '@/services/voiceService';
 
-try {
-  // Try to import react-native-webrtc to check availability
-  require('react-native-webrtc');
-  const vs = require('@/services/voiceService');
-  voiceService = vs.voiceService;
-  isWebRTCAvailable = true;
-} catch (_) {
-  isWebRTCAvailable = false;
-}
-
-import type { VoiceMember, VoiceRoomState } from '@/services/voiceService';
+const isWebRTCAvailable = isWebRTCSupported();
 
 /* =====================================================
    VOICE SCREEN

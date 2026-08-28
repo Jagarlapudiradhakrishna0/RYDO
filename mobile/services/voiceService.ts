@@ -7,18 +7,31 @@
  * Audio control: PTT (push-to-talk) — mic track.enabled true/false
  * Speaker lock: Backend-authoritative (voice:request / voice:granted / voice:denied)
  *
- * IMPORTANT: Requires react-native-webrtc native module.
- * This will NOT work in Expo Go — requires `npx expo run:android` dev build.
+ * Safe for both Expo Go (graceful degradation) and Development Builds (full WebRTC).
  */
 
-import {
-  RTCPeerConnection,
-  RTCSessionDescription,
-  RTCIceCandidate,
-  mediaDevices,
-  MediaStream,
-} from 'react-native-webrtc';
 import { socketService } from './socketService';
+
+/* =====================================================
+   SAFE LAZY WEBRTC MODULE ACCESS
+===================================================== */
+
+export function getWebRTCModule(): any {
+  try {
+    const webrtc = require('react-native-webrtc');
+    if (webrtc && (webrtc.RTCPeerConnection || webrtc.default?.RTCPeerConnection)) {
+      return webrtc.RTCPeerConnection ? webrtc : webrtc.default;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function isWebRTCSupported(): boolean {
+  const mod = getWebRTCModule();
+  return Boolean(mod && mod.RTCPeerConnection);
+}
 
 /* =====================================================
    TYPES
@@ -59,9 +72,9 @@ const ICE_SERVERS = {
 ===================================================== */
 
 class VoiceService {
-  private localStream: MediaStream | null = null;
-  private peers: Map<string, RTCPeerConnection> = new Map(); // socketId → RTCPeerConnection
-  private remoteStreams: Map<string, MediaStream> = new Map(); // socketId → remote stream
+  private localStream: any | null = null;
+  private peers: Map<string, any> = new Map(); // socketId → RTCPeerConnection
+  private remoteStreams: Map<string, any> = new Map(); // socketId → remote stream
   private isJoined = false;
   private isSpeaking = false;
   private activeRideCode: string | null = null;
@@ -77,7 +90,7 @@ class VoiceService {
   private speakerListeners = new Set<SpeakerCallback>();
   private statusListeners = new Set<StatusCallback>();
   private grantListeners = new Set<GrantCallback>();
-  private streamListeners = new Set<(socketId: string, stream: MediaStream | null) => void>();
+  private streamListeners = new Set<(socketId: string, stream: any | null) => void>();
 
   private currentState: VoiceRoomState = {
     members: [],
@@ -95,6 +108,12 @@ class VoiceService {
     role: string;
     memberId: string;
   }): Promise<void> {
+    const webrtc = getWebRTCModule();
+    if (!webrtc) {
+      this.notifyStatus('error');
+      throw new Error('WebRTC native module is not available in Expo Go. Please open using the Development Build.');
+    }
+
     if (this.isJoined && this.activeRideCode === params.rideCode.toUpperCase()) {
       console.log('[VOICE] Already joined voice room:', params.rideCode);
       return;
@@ -114,7 +133,7 @@ class VoiceService {
 
     try {
       // Acquire microphone stream (starts muted — PTT controls enable/disable)
-      this.localStream = await mediaDevices.getUserMedia({
+      this.localStream = await webrtc.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -199,9 +218,11 @@ class VoiceService {
 
   private setMicEnabled(enabled: boolean): void {
     if (!this.localStream) return;
-    this.localStream.getAudioTracks().forEach((track) => {
-      track.enabled = enabled;
-    });
+    try {
+      this.localStream.getAudioTracks().forEach((track: any) => {
+        track.enabled = enabled;
+      });
+    } catch (_) {}
   }
 
   /* ===================================================
@@ -255,7 +276,7 @@ class VoiceService {
       const leftSocketId = data.socketId;
       const pc = this.peers.get(leftSocketId);
       if (pc) {
-        pc.close();
+        try { pc.close(); } catch (_) {}
         this.peers.delete(leftSocketId);
       }
       this.remoteStreams.delete(leftSocketId);
@@ -299,10 +320,15 @@ class VoiceService {
     /* voice:offer — received WebRTC offer from another peer */
     const onOffer = async (data: any) => {
       if (String(data?.rideCode || '').toUpperCase() !== this.activeRideCode) return;
+      const webrtc = getWebRTCModule();
+      if (!webrtc) return;
+
       try {
         const fromSocketId = data.fromSocketId;
         const pc = this.getOrCreatePeerConnection(fromSocketId);
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        if (!pc) return;
+
+        await pc.setRemoteDescription(new webrtc.RTCSessionDescription(data.sdp));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -319,10 +345,14 @@ class VoiceService {
 
     /* voice:answer — received WebRTC answer from peer */
     const onAnswer = async (data: any) => {
+      if (String(data?.rideCode || '').toUpperCase() !== this.activeRideCode) return;
+      const webrtc = getWebRTCModule();
+      if (!webrtc) return;
+
       try {
         const pc = this.peers.get(data.fromSocketId);
         if (!pc) return;
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        await pc.setRemoteDescription(new webrtc.RTCSessionDescription(data.sdp));
       } catch (err) {
         console.error('[VOICE] Error handling answer:', err);
       }
@@ -330,10 +360,14 @@ class VoiceService {
 
     /* voice:ice-candidate — received ICE candidate from peer */
     const onIceCandidate = async (data: any) => {
+      if (String(data?.rideCode || '').toUpperCase() !== this.activeRideCode) return;
+      const webrtc = getWebRTCModule();
+      if (!webrtc) return;
+
       try {
         const pc = this.peers.get(data.fromSocketId);
         if (!pc || !data.candidate) return;
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        await pc.addIceCandidate(new webrtc.RTCIceCandidate(data.candidate));
       } catch (err) {
         console.error('[VOICE] Error adding ICE candidate:', err);
       }
@@ -378,22 +412,29 @@ class VoiceService {
      WEBRTC — CREATE / GET PEER CONNECTION
   =================================================== */
 
-  private getOrCreatePeerConnection(remoteSocketId: string): RTCPeerConnection {
+  private getOrCreatePeerConnection(remoteSocketId: string): any {
     if (this.peers.has(remoteSocketId)) {
       return this.peers.get(remoteSocketId)!;
     }
 
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const webrtc = getWebRTCModule();
+    if (!webrtc) return null;
+
+    const pc = new webrtc.RTCPeerConnection(ICE_SERVERS);
 
     // Add local audio track to this peer connection
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
-      });
+      try {
+        this.localStream.getTracks().forEach((track: any) => {
+          pc.addTrack(track, this.localStream!);
+        });
+      } catch (err) {
+        console.warn('[VOICE] Error adding track to peer connection:', err);
+      }
     }
 
     // ICE candidate — forward to peer via signaling
-    (pc as any).addEventListener('icecandidate', (event: any) => {
+    pc.addEventListener('icecandidate', (event: any) => {
       if (event.candidate) {
         const socket = socketService.getSocket();
         socket?.emit('voice:ice-candidate', {
@@ -405,15 +446,17 @@ class VoiceService {
     });
 
     // Remote track received — this is the other person's audio
-    (pc as any).addEventListener('track', (event: any) => {
-      const remoteStream = event.streams?.[0] || new MediaStream([event.track]);
-      this.remoteStreams.set(remoteSocketId, remoteStream);
-      this.streamListeners.forEach((l) => l(remoteSocketId, remoteStream));
-      console.log('[VOICE] Got remote audio track from:', remoteSocketId);
+    pc.addEventListener('track', (event: any) => {
+      const remoteStream = event.streams?.[0] || (webrtc.MediaStream ? new webrtc.MediaStream([event.track]) : null);
+      if (remoteStream) {
+        this.remoteStreams.set(remoteSocketId, remoteStream);
+        this.streamListeners.forEach((l) => l(remoteSocketId, remoteStream));
+        console.log('[VOICE] Got remote audio track from:', remoteSocketId);
+      }
     });
 
-    (pc as any).addEventListener('connectionstatechange', () => {
-      const state = (pc as any).connectionState;
+    pc.addEventListener('connectionstatechange', () => {
+      const state = pc.connectionState;
       console.log(`[VOICE] Peer ${remoteSocketId} connection state:`, state);
     });
 
@@ -424,6 +467,8 @@ class VoiceService {
   private async initiateOffer(remoteSocketId: string): Promise<void> {
     try {
       const pc = this.getOrCreatePeerConnection(remoteSocketId);
+      if (!pc) return;
+
       const offer = await pc.createOffer({});
       await pc.setLocalDescription(offer);
 
@@ -448,7 +493,9 @@ class VoiceService {
 
     // Stop all local tracks
     if (this.localStream) {
-      this.localStream.getTracks().forEach((t) => t.stop());
+      try {
+        this.localStream.getTracks().forEach((t: any) => t.stop());
+      } catch (_) {}
       this.localStream = null;
     }
 
@@ -474,7 +521,7 @@ class VoiceService {
   public getIsSpeaking(): boolean { return this.isSpeaking; }
   public getActiveRideCode(): string | null { return this.activeRideCode; }
   public getCurrentState(): VoiceRoomState { return this.currentState; }
-  public getRemoteStreams(): Map<string, MediaStream> { return this.remoteStreams; }
+  public getRemoteStreams(): Map<string, any> { return this.remoteStreams; }
 
   /* ===================================================
      SUBSCRIPTIONS
@@ -501,7 +548,7 @@ class VoiceService {
     return () => this.grantListeners.delete(cb);
   }
 
-  public onRemoteStream(cb: (socketId: string, stream: MediaStream | null) => void): () => void {
+  public onRemoteStream(cb: (socketId: string, stream: any | null) => void): () => void {
     this.streamListeners.add(cb);
     return () => this.streamListeners.delete(cb);
   }
