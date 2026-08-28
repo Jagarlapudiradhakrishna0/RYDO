@@ -19,8 +19,6 @@ import { getCurrentUser } from '@/constants/auth';
 
 import { voiceService, isWebRTCSupported, VoiceMember, VoiceRoomState } from '@/services/voiceService';
 
-const isWebRTCAvailable = isWebRTCSupported();
-
 /* =====================================================
    VOICE SCREEN
 ===================================================== */
@@ -41,6 +39,7 @@ export default function VoiceScreen() {
   const userName = params.userName || currentUser?.name || 'Rider';
   const memberId = params.memberId || currentUser?._id || `${role}-${userName.toLowerCase()}`;
 
+  const [isWebRTCAvailable, setIsWebRTCAvailable] = useState(() => isWebRTCSupported());
   const [status, setStatus] = useState<VoiceStatus>('idle');
   const [members, setMembers] = useState<VoiceMember[]>([]);
   const [activeSpeakerName, setActiveSpeakerName] = useState<string | null>(null);
@@ -51,6 +50,12 @@ export default function VoiceScreen() {
 
   const pttScaleAnim = useRef(new Animated.Value(1)).current;
   const statusDotAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const supported = isWebRTCSupported();
+    console.log('[VOICE SCREEN] WebRTC Supported check:', supported);
+    setIsWebRTCAvailable(supported);
+  }, []);
 
   /* ===================================================
      PTT PAN RESPONDER (hold to talk)
