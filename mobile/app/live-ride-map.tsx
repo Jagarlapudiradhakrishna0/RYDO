@@ -36,6 +36,10 @@ import { io as SocketIO } from 'socket.io-client';
 import { API_URL, SOCKET_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
+import CommunicationButton from '@/components/CommunicationButton';
+import { communicationService } from '@/services/communicationService';
+import { socketService } from '@/services/socketService';
+import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
 
@@ -49,6 +53,11 @@ const OSRM_URL =
 /* =====================================================
    TYPES
 ===================================================== */
+
+type Coordinate = {
+  latitude: number;
+  longitude: number;
+};
 
 type Rider = {
   _id?: string;
@@ -155,6 +164,7 @@ export default function LiveRideMap() {
   // SOS Emergency States
   const [activeSosEvent, setActiveSosEvent] = useState<SosEvent | null>(null);
   const [sosOverlayVisible, setSosOverlayVisible] = useState<boolean>(false);
+  const [emergencyRoute, setEmergencyRoute] = useState<Coordinate[]>([]);
 
 
   /* ===================================================
@@ -281,20 +291,16 @@ export default function LiveRideMap() {
       SOCKET_URL
     );
 
-    const socket =
-      SocketIO(SOCKET_URL, {
-        transports: [
-          'websocket',
-          'polling',
-        ],
-
-        reconnectionAttempts: 5,
-
-        timeout: 15000,
-      });
+    const socket = socketService.connect({
+      rideCode: code,
+      userId: myMemberId,
+      userName: myName || 'User',
+      role: isRider ? 'rider' : 'captain',
+    });
 
     socketRef.current = socket;
-
+    communicationService.setActiveRideCode(code);
+    communicationService.setActiveUser(myMemberId, myName);
 
     /* -------------------------------------------------
        JOIN RIDE ROOM
@@ -542,9 +548,11 @@ export default function LiveRideMap() {
       const lng = Number(payload.location?.longitude ?? payload.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
+      const eventId = payload.eventId || payload.sosId || `${payload.userId || payload.name}_${payload.triggeredAt || 'active'}`;
+
       const event: SosEvent = {
-        eventId: payload.eventId || payload.sosId || String(Date.now()),
-        sosId: payload.sosId || payload.eventId,
+        eventId,
+        sosId: payload.sosId || payload.eventId || eventId,
         rideCode: payload.rideCode || (rideCode as string) || '',
         name: payload.name || payload.riderName || 'Ride Member',
         riderName: payload.riderName || payload.name,
@@ -571,6 +579,7 @@ export default function LiveRideMap() {
       console.log('RYDO: SOS resolved on live-ride-map:', data);
       setActiveSosEvent(null);
       setSosOverlayVisible(false);
+      setEmergencyRoute([]);
     });
 
     socket.on('disconnect', (reason: string) => {
@@ -586,10 +595,6 @@ export default function LiveRideMap() {
     ------------------------------------------------- */
 
     return () => {
-      console.log(
-        'RYDO: Cleaning up socket...'
-      );
-
       socket.off('locationsSnapshot');
       socket.off('locationUpdated');
       socket.off('userLeft');
@@ -599,10 +604,6 @@ export default function LiveRideMap() {
       socket.off('sosAlert', handleSosEvent);
       socket.off('sosTriggered', handleSosEvent);
       socket.off('sosResolved');
-      socket.off('disconnect');
-
-      socket.disconnect();
-      socketRef.current = null;
     };
 
   }, [rideCode]);
@@ -1514,7 +1515,7 @@ export default function LiveRideMap() {
       router.back();
     };
 
-  const handleViewSosLocation = (sos: SosEvent) => {
+  const handleViewSosLocation = async (sos: SosEvent) => {
     setSosOverlayVisible(false);
     const sosLat = sos.location?.latitude ?? sos.latitude;
     const sosLng = sos.location?.longitude ?? sos.longitude;
@@ -1529,6 +1530,27 @@ export default function LiveRideMap() {
       },
       1000
     );
+
+    // Calculate emergency route from current user's location to SOS location
+    const startLat = location?.latitude;
+    const startLng = location?.longitude;
+    if (startLat && startLng) {
+      try {
+        const url = `${OSRM_URL}/${startLng.toFixed(5)},${startLat.toFixed(5)};${sosLng.toFixed(5)},${sosLat.toFixed(5)}?overview=full&geometries=geojson`;
+        console.log('[RYDO SOS] Calculating emergency route on live-ride-map:', url);
+        const res = await fetch(url);
+        const routeJson = await res.json();
+        if (routeJson.routes?.[0]?.geometry?.coordinates) {
+          const coords: Coordinate[] = routeJson.routes[0].geometry.coordinates.map(
+            (c: number[]) => ({ latitude: c[1], longitude: c[0] })
+          );
+          setEmergencyRoute(coords);
+          console.log('[RYDO SOS] Emergency route calculated successfully on live-ride-map');
+        }
+      } catch (e) {
+        console.log('RYDO SOS: Emergency route error:', e);
+      }
+    }
   };
 
 
@@ -1770,6 +1792,13 @@ export default function LiveRideMap() {
               </Text>
             </View>
 
+            <CommunicationButton
+              rideCode={displayRideCode}
+              role={isRider ? 'rider' : 'captain'}
+              userName={myName}
+              size={34}
+            />
+
             <ProfileHeaderButton size={34} />
           </View>
 
@@ -1856,6 +1885,21 @@ export default function LiveRideMap() {
                   lineJoin="round"
 
                   zIndex={5}
+                />
+              )}
+
+              {/* =====================================
+                  EMERGENCY SOS ROUTE (RED)
+              ===================================== */}
+
+              {emergencyRoute.length > 1 && (
+                <Polyline
+                  coordinates={emergencyRoute}
+                  strokeColor="#EF4444"
+                  strokeWidth={6}
+                  lineCap="round"
+                  lineJoin="round"
+                  zIndex={40}
                 />
               )}
 
@@ -2125,6 +2169,36 @@ export default function LiveRideMap() {
                         styles.destinationInner
                       }
                     />
+                  </View>
+                </Marker>
+              )}
+
+              {/* =====================================
+                  ACTIVE SOS EMERGENCY MARKER
+              ===================================== */}
+
+              {activeSosEvent && (
+                <Marker
+                  key={`sos-marker-${activeSosEvent.eventId || activeSosEvent.userId || 'emergency'}`}
+                  coordinate={{
+                    latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
+                    longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
+                  }}
+                  title={`🚨 SOS: ${activeSosEvent.name || activeSosEvent.riderName}`}
+                  description="EMERGENCY LOCATION • TAP FOR DETAILS"
+                  onPress={() => setSosOverlayVisible(true)}
+                  tracksViewChanges={true}
+                  zIndex={100}
+                >
+                  <View style={styles.sosMarkerWrapper}>
+                    <View style={styles.sosMarkerOuter}>
+                      <Text style={styles.sosMarkerIcon}>🚨</Text>
+                    </View>
+                    <View style={styles.sosMarkerBadge}>
+                      <Text style={styles.sosMarkerBadgeText} numberOfLines={1}>
+                        SOS • {activeSosEvent.name || activeSosEvent.riderName} ({activeSosEvent.role?.toUpperCase()})
+                      </Text>
+                    </View>
                   </View>
                 </Marker>
               )}
@@ -2714,45 +2788,20 @@ export default function LiveRideMap() {
           </View>
 
 
-          {/* SOS BUTTON (prominent, for riders) */}
-
-          {isRider && (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.sosButton}
-              onPress={handleSOS}
-            >
-              <View
-                style={styles.sosIcon}
-              >
-                <Text
-                  style={
-                    styles.sosIconText
-                  }
-                >
-                  !
-                </Text>
-              </View>
-
-              <View>
-                <Text
-                  style={
-                    styles.sosButtonText
-                  }
-                >
-                  SOS EMERGENCY
-                </Text>
-
-                <Text
-                  style={
-                    styles.sosButtonSub
-                  }
-                >
-                  TAP TO SEND ALERT TO CREW
-                </Text>
-              </View>
-            </TouchableOpacity>
-          )}
+          {/* ===============================================
+              SOS EMERGENCY BUTTON (for Captain & Riders)
+          =============================================== */}
+          <SosButton
+            rideCode={displayRideCode}
+            role={isRider ? 'rider' : 'captain'}
+            userName={myName || (isRider ? 'Rider' : displayCaptain)}
+            userId={myMemberId}
+            socket={socketRef.current}
+            onSosSent={(sos) => {
+              setActiveSosEvent(sos);
+            }}
+            style={{ marginHorizontal: 22, marginTop: 20 }}
+          />
 
 
           {/* GPS STATUS */}
@@ -3767,6 +3816,53 @@ const styles =
       fontWeight:
         '800',
       letterSpacing: 1.2,
+    },
+
+    /* ===============================================
+       SOS MAP MARKER
+    =============================================== */
+
+    sosMarkerWrapper: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+
+    sosMarkerOuter: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: '#DC2626',
+      borderWidth: 3,
+      borderColor: '#FFFFFF',
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: '#EF4444',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.8,
+      shadowRadius: 10,
+      elevation: 12,
+    },
+
+    sosMarkerIcon: {
+      fontSize: 20,
+    },
+
+    sosMarkerBadge: {
+      backgroundColor: '#DC2626',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+      marginTop: 4,
+      borderWidth: 1,
+      borderColor: '#FFFFFF',
+      maxWidth: 160,
+    },
+
+    sosMarkerBadgeText: {
+      color: '#FFFFFF',
+      fontSize: 9,
+      fontWeight: '900',
+      letterSpacing: 0.5,
     },
 
   });

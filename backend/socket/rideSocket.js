@@ -12,6 +12,7 @@
    ===================================================== */
 
 const Ride = require('../models/Ride');
+const RideMessage = require('../models/RideMessage');
 
 /* =====================================================
    IN-MEMORY ACTIVE RIDE STORE
@@ -443,7 +444,7 @@ function initializeRideSocket(io) {
                 status: e.status,
               }));
           }
-        } catch (e) {}
+        } catch (e) { }
 
         socket.emit('locationsSnapshot', {
           success: true,
@@ -479,6 +480,43 @@ function initializeRideSocket(io) {
         const rideDoc = await Ride.findOne({ rideCode });
         if (!rideDoc) return;
 
+        // Deduplicate rapid consecutive SOS triggers within 5 seconds for same ride & sender
+        const lastSos = Array.isArray(rideDoc.sosEvents) && rideDoc.sosEvents.length > 0
+          ? rideDoc.sosEvents[rideDoc.sosEvents.length - 1]
+          : null;
+
+        if (
+          lastSos &&
+          lastSos.status === 'active' &&
+          (Date.now() - new Date(lastSos.triggeredAt || lastSos.createdAt).getTime()) < 5000 &&
+          (lastSos.name === senderName || lastSos.riderName === senderName)
+        ) {
+          console.log('[RYDO SOS] Deduplicating rapid socket triggerSos for:', senderName);
+          const sosPayload = {
+            eventId: lastSos._id.toString(),
+            sosId: lastSos._id.toString(),
+            rideCode,
+            name: lastSos.name || senderName,
+            riderName: lastSos.riderName || senderName,
+            role: lastSos.role || senderRole,
+            userId: lastSos.userId,
+            bikeNumber: lastSos.bikeNumber,
+            bloodGroup: lastSos.bloodGroup,
+            emergencyContact: lastSos.emergencyContact,
+            location: {
+              latitude: lastSos.latitude,
+              longitude: lastSos.longitude,
+            },
+            latitude: lastSos.latitude,
+            longitude: lastSos.longitude,
+            triggeredAt: (lastSos.triggeredAt || new Date()).toISOString(),
+            createdAt: (lastSos.triggeredAt || new Date()).toISOString(),
+            status: 'active',
+          };
+          io.to(rideCode).emit('sosAlert', sosPayload);
+          return;
+        }
+
         let userProfile = null;
         if (senderUserId && String(senderUserId).match(/^[0-9a-fA-F]{24}$/)) {
           userProfile = await User.findById(senderUserId);
@@ -496,9 +534,9 @@ function initializeRideSocket(io) {
           bloodGroup: userProfile?.bloodGroup || null,
           emergencyContact: userProfile?.emergencyContact
             ? {
-                name: userProfile.emergencyContact.name,
-                phoneNumber: userProfile.emergencyContact.phoneNumber,
-              }
+              name: userProfile.emergencyContact.name,
+              phoneNumber: userProfile.emergencyContact.phoneNumber,
+            }
             : { name: null, phoneNumber: null },
           status: 'active',
           latitude: lat,
@@ -547,6 +585,95 @@ function initializeRideSocket(io) {
         console.error('RYDO: triggerSos socket error:', err);
       }
     });
+
+    /* =================================================
+       RIDE COMMUNICATION - SEND MESSAGE
+       Event: 'ride:message:send' (and alias 'sendMessage')
+       Data: {
+         messageId,
+         rideCode,
+         senderId,
+         senderName,
+         senderRole,
+         messageText,
+         messageType,
+         timestamp
+       }
+    ================================================= */
+    const handleSendMessage = async (data, callback) => {
+      try {
+        if (!data) return;
+        const rideCode = String(data.rideCode || socket.rideCode || '').toUpperCase().trim();
+        const senderName = String(data.senderName || socket.userName || 'Anonymous').trim();
+        const senderRole = String(data.senderRole || socket.role || 'rider').toLowerCase().trim();
+        const senderId = String(data.senderId || socket.memberId || socket.userId || '').trim() || null;
+        const messageText = String(data.messageText || '').trim();
+        const messageType = ['quick', 'custom', 'system'].includes(data.messageType) ? data.messageType : 'quick';
+        const messageId = String(data.messageId || '').trim() || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const timestamp = data.timestamp ? new Date(data.timestamp).toISOString() : new Date().toISOString();
+
+        if (!rideCode || !messageText) {
+          if (typeof callback === 'function') callback({ success: false, error: 'Missing rideCode or messageText' });
+          return;
+        }
+
+        // Verify ride existence in database (non-blocking)
+        try {
+          const rideDoc = await Ride.findOne({ rideCode: new RegExp(`^${rideCode}$`, 'i') });
+          if (!rideDoc) {
+            console.log(`[RYDO COMM] Notice: Ride ${rideCode} document not found in DB, proceeding with room broadcast.`);
+          }
+        } catch (e) {
+          console.log('[RYDO COMM] Ride doc lookup error (non-fatal):', e);
+        }
+
+        // Persist message in MongoDB (idempotent)
+        let rideMsg = await RideMessage.findOne({ messageId });
+        if (!rideMsg) {
+          rideMsg = await RideMessage.create({
+            messageId,
+            rideCode,
+            senderId,
+            senderName,
+            senderRole: senderRole === 'captain' ? 'captain' : senderRole === 'system' ? 'system' : 'rider',
+            messageText,
+            messageType,
+            createdAt: new Date(timestamp),
+          });
+        }
+
+        const messagePayload = {
+          messageId: rideMsg.messageId,
+          rideCode: rideMsg.rideCode,
+          senderId: rideMsg.senderId,
+          senderName: rideMsg.senderName,
+          senderRole: rideMsg.senderRole,
+          messageText: rideMsg.messageText,
+          messageType: rideMsg.messageType,
+          timestamp: rideMsg.createdAt ? rideMsg.createdAt.toISOString() : new Date().toISOString(),
+          createdAt: rideMsg.createdAt ? rideMsg.createdAt.toISOString() : new Date().toISOString(),
+        };
+
+        console.log(`[SEND] rideCode=${rideCode} sender=${senderName} role=${senderRole} message="${messageText}"`);
+        console.log(`[BROADCAST] event=ride:message:new room=${rideCode}`);
+
+        // Broadcast to ALL members in this ride room in real-time
+        io.to(rideCode).emit('ride:message:new', messagePayload);
+        io.to(rideCode).emit('messageReceived', messagePayload);
+
+        if (typeof callback === 'function') {
+          callback({ success: true, message: messagePayload });
+        }
+      } catch (err) {
+        console.error('RYDO: ride:message:send socket error:', err);
+        if (typeof callback === 'function') {
+          callback({ success: false, error: err.message });
+        }
+      }
+    };
+
+    socket.on('ride:message:send', handleSendMessage);
+    socket.on('sendMessage', handleSendMessage);
 
     /* =================================================
        START / END RIDE
@@ -611,7 +738,7 @@ function initializeRideSocket(io) {
         console.log(`RYDO: ${userName} left ride ${rideCode}`);
 
         // Clear in-memory rider location
-        const roomState = rooms.get(rideCode);
+        const roomState = rideRooms.get(rideCode);
         if (roomState) {
           if (memberId) roomState.riderLocations.delete(memberId);
           for (const [key, val] of roomState.riderLocations.entries()) {
@@ -632,10 +759,10 @@ function initializeRideSocket(io) {
               );
               if (r) {
                 r.location = null;
-                rDoc.save().catch(() => {});
+                rDoc.save().catch(() => { });
               }
             }
-          }).catch(() => {});
+          }).catch(() => { });
         }
 
         socket.to(rideCode).emit('userLeft', {

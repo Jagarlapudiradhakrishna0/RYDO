@@ -13,11 +13,20 @@ import {
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import { API_URL } from '@/constants/network';
+import {
+  CommunicationSettings,
+  VoiceGender,
+  getCommunicationSettings,
+  updateCommunicationSettings,
+  subscribeToCommunicationSettings,
+} from '@/services/communicationSettings';
+import { ttsService } from '@/services/ttsService';
 import {
   getCurrentUser,
   setCurrentUser,
@@ -53,6 +62,48 @@ export default function ProfileScreen() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+
+  // Communication & Voice Notification Settings
+  const [commSettings, setCommSettings] = useState<CommunicationSettings>({
+    voiceEnabled: true,
+    voiceGender: 'default',
+    soundEnabled: true,
+    importantAlertsOnly: false,
+  });
+
+  useEffect(() => {
+    const unsub = subscribeToCommunicationSettings((settings) => {
+      setCommSettings(settings);
+    });
+    return unsub;
+  }, []);
+
+  const handleToggleVoice = async (val: boolean) => {
+    await updateCommunicationSettings({ voiceEnabled: val });
+  };
+
+  const handleSetVoiceGender = async (gender: VoiceGender) => {
+    await updateCommunicationSettings({ voiceGender: gender });
+  };
+
+  const handleToggleSound = async (val: boolean) => {
+    await updateCommunicationSettings({ soundEnabled: val });
+  };
+
+  const handleToggleImportantOnly = async (val: boolean) => {
+    await updateCommunicationSettings({ importantAlertsOnly: val });
+  };
+
+  const handleTestVoice = async () => {
+    try {
+      await ttsService.speakMessage('RYDO', 'Let\'s take a break. Voice notifications are active.', {
+        ...commSettings,
+        voiceEnabled: true, // Force enable for test button
+      });
+    } catch (e) {
+      console.log('Voice test error:', e);
+    }
+  };
 
   /* =====================================================
      AUTH SUBSCRIPTION & FETCH LATEST PROFILE
@@ -505,7 +556,113 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* SECTION 5: APP & SYSTEM SETTINGS */}
+          {/* SECTION 5: COMMUNICATION & VOICE NOTIFICATION SETTINGS */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="volume-high-outline" size={16} color="#FFFFFF" />
+              <Text style={[styles.sectionTitleMuted, { color: '#FFFFFF' }]}>COMMUNICATION & VOICE</Text>
+            </View>
+
+            <View style={styles.card}>
+              {/* VOICE NOTIFICATIONS TOGGLE */}
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleLabelContainer}>
+                  <Text style={styles.infoLabel}>VOICE ANNOUNCEMENTS</Text>
+                  <Text style={styles.toggleSubLabel}>Speak incoming ride messages aloud</Text>
+                </View>
+                <Switch
+                  value={commSettings.voiceEnabled}
+                  onValueChange={handleToggleVoice}
+                  trackColor={{ false: '#2C2C2E', true: '#FFFFFF' }}
+                  thumbColor={commSettings.voiceEnabled ? '#000000' : '#8E8E93'}
+                />
+              </View>
+
+              {/* VOICE GENDER / ACCENT SELECTOR */}
+              {commSettings.voiceEnabled && (
+                <>
+                  <View style={styles.cardDivider} />
+                  <View style={styles.voiceGenderSection}>
+                    <Text style={styles.voiceGenderTitle}>VOICE GENDER / TYPE</Text>
+                    <View style={styles.voicePillsRow}>
+                      {(['male', 'female', 'default'] as VoiceGender[]).map((gender) => {
+                        const isSelected = commSettings.voiceGender === gender;
+                        return (
+                          <TouchableOpacity
+                            key={gender}
+                            activeOpacity={0.8}
+                            style={[
+                              styles.voicePill,
+                              isSelected && styles.voicePillSelected,
+                            ]}
+                            onPress={() => handleSetVoiceGender(gender)}
+                          >
+                            <Ionicons
+                              name={gender === 'female' ? 'woman' : gender === 'male' ? 'man' : 'hardware-chip-outline'}
+                              size={14}
+                              color={isSelected ? '#000000' : '#8E8E93'}
+                            />
+                            <Text
+                              style={[
+                                styles.voicePillText,
+                                isSelected && styles.voicePillTextSelected,
+                              ]}
+                            >
+                              {gender === 'default' ? 'DEVICE' : gender.toUpperCase()}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {/* TEST VOICE BUTTON */}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.testVoiceBtn}
+                      onPress={handleTestVoice}
+                    >
+                      <Ionicons name="play" size={14} color="#FFFFFF" />
+                      <Text style={styles.testVoiceBtnText}>TEST VOICE ANNOUNCEMENT</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              <View style={styles.cardDivider} />
+
+              {/* NOTIFICATION SOUND TOGGLE */}
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleLabelContainer}>
+                  <Text style={styles.infoLabel}>NOTIFICATION CHIME</Text>
+                  <Text style={styles.toggleSubLabel}>Play audio alert on incoming message</Text>
+                </View>
+                <Switch
+                  value={commSettings.soundEnabled}
+                  onValueChange={handleToggleSound}
+                  trackColor={{ false: '#2C2C2E', true: '#FFFFFF' }}
+                  thumbColor={commSettings.soundEnabled ? '#000000' : '#8E8E93'}
+                />
+              </View>
+
+              <View style={styles.cardDivider} />
+
+              {/* IMPORTANT ALERTS ONLY TOGGLE */}
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleLabelContainer}>
+                  <Text style={styles.infoLabel}>URGENT ALERTS ONLY</Text>
+                  <Text style={styles.toggleSubLabel}>Filter only emergency and route changes</Text>
+                </View>
+                <Switch
+                  value={commSettings.importantAlertsOnly}
+                  onValueChange={handleToggleImportantOnly}
+                  trackColor={{ false: '#2C2C2E', true: '#FFFFFF' }}
+                  thumbColor={commSettings.importantAlertsOnly ? '#000000' : '#8E8E93'}
+                />
+              </View>
+            </View>
+          </View>
+
+          {/* SECTION 6: APP & SYSTEM SETTINGS */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Ionicons name="phone-portrait-outline" size={16} color="#888888" />
@@ -1347,5 +1504,77 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 2,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  toggleLabelContainer: {
+    flex: 1,
+    paddingRight: 16,
+  },
+  toggleSubLabel: {
+    fontSize: 12,
+    color: '#717E91',
+    marginTop: 2,
+  },
+  voiceGenderSection: {
+    paddingVertical: 10,
+  },
+  voiceGenderTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#8E9BAE',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  voicePillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  voicePill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1E242F',
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    gap: 6,
+  },
+  voicePillSelected: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FFFFFF',
+  },
+  voicePillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#8E8E93',
+    letterSpacing: 0.5,
+  },
+  voicePillTextSelected: {
+    color: '#000000',
+  },
+  testVoiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1C1C1E',
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    borderRadius: 8,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  testVoiceBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.8,
   },
 });

@@ -84,12 +84,13 @@ export const SosEmergencyOverlay: React.FC<SosEmergencyOverlayProps> = ({
     const flashTimer = setTimeout(() => {
       flashLoop.stop();
       setFlashActive(false);
+      sosEmergencyManager.stopEmergencyAlerts();
       Animated.timing(flashAnim, {
         toValue: 0,
         duration: 300,
         useNativeDriver: false,
       }).start();
-      console.log('[RYDO SOS] 10-second red flash completed');
+      console.log('[RYDO SOS] 10-second red flash and audio completed');
     }, 10000);
 
     return () => {

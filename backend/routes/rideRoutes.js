@@ -1,6 +1,7 @@
 const express = require('express');
 const Ride = require('../models/Ride');
 const User = require('../models/User');
+const RideMessage = require('../models/RideMessage');
 
 const router = express.Router();
 
@@ -1995,6 +1996,118 @@ router.patch(
   }
 );
 
+
+/* =====================================================
+   COMMUNICATION MESSAGES
+   GET /api/rides/:rideCode/messages
+   Fetch recent message history for a ride
+===================================================== */
+
+router.get(
+  '/:rideCode/messages',
+  async (req, res) => {
+    try {
+      const rideCode = String(req.params.rideCode || '').toUpperCase().trim();
+      if (!rideCode) {
+        return res.status(400).json({ success: false, message: 'Ride code is required' });
+      }
+
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+
+      const messages = await RideMessage.find({ rideCode })
+        .sort({ createdAt: 1 })
+        .limit(limit)
+        .lean();
+
+      return res.json({
+        success: true,
+        rideCode,
+        count: messages.length,
+        messages: messages.map((m) => ({
+          messageId: m.messageId,
+          rideCode: m.rideCode,
+          senderId: m.senderId,
+          senderName: m.senderName,
+          senderRole: m.senderRole,
+          messageText: m.messageText,
+          messageType: m.messageType,
+          timestamp: m.createdAt ? new Date(m.createdAt).toISOString() : new Date().toISOString(),
+          createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : new Date().toISOString(),
+        })),
+      });
+    } catch (error) {
+      console.error('RYDO: Error fetching messages:', error);
+      return res.status(500).json({ success: false, message: 'Failed to fetch ride messages' });
+    }
+  }
+);
+
+/* =====================================================
+   POST /api/rides/:rideCode/messages
+   Send a new message via REST API
+===================================================== */
+
+router.post(
+  '/:rideCode/messages',
+  async (req, res) => {
+    try {
+      const rideCode = String(req.params.rideCode || '').toUpperCase().trim();
+      const { senderId, senderName, senderRole, messageText, messageType, messageId, timestamp } = req.body;
+
+      if (!rideCode || !messageText) {
+        return res.status(400).json({ success: false, message: 'Ride code and message text are required' });
+      }
+
+      const finalMessageId = String(messageId || '').trim() || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const finalSenderName = String(senderName || 'Anonymous').trim();
+      const finalSenderRole = ['captain', 'rider', 'system'].includes(senderRole) ? senderRole : 'rider';
+      const finalMessageType = ['quick', 'custom', 'system'].includes(messageType) ? messageType : 'quick';
+      const finalTimestamp = timestamp ? new Date(timestamp) : new Date();
+
+      let rideMsg = await RideMessage.findOne({ messageId: finalMessageId });
+      if (!rideMsg) {
+        rideMsg = await RideMessage.create({
+          messageId: finalMessageId,
+          rideCode,
+          senderId: senderId || null,
+          senderName: finalSenderName,
+          senderRole: finalSenderRole,
+          messageText: String(messageText).trim(),
+          messageType: finalMessageType,
+          createdAt: finalTimestamp,
+        });
+      }
+
+      const messagePayload = {
+        messageId: rideMsg.messageId,
+        rideCode: rideMsg.rideCode,
+        senderId: rideMsg.senderId,
+        senderName: rideMsg.senderName,
+        senderRole: rideMsg.senderRole,
+        messageText: rideMsg.messageText,
+        messageType: rideMsg.messageType,
+        timestamp: rideMsg.createdAt.toISOString(),
+        createdAt: rideMsg.createdAt.toISOString(),
+      };
+
+      // Broadcast via Socket.IO if available
+      const io = req.app.get('io');
+      if (io) {
+        io.to(rideCode).emit('ride:message:new', messagePayload);
+        io.to(rideCode).emit('messageReceived', messagePayload);
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Message sent successfully',
+        data: messagePayload,
+      });
+    } catch (error) {
+      console.error('RYDO: Error sending message via REST:', error);
+      return res.status(500).json({ success: false, message: 'Failed to send message' });
+    }
+  }
+);
 
 /* =====================================================
    EXPORT

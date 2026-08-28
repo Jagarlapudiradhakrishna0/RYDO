@@ -34,6 +34,9 @@ import * as Location from 'expo-location';
 
 import { io, Socket } from 'socket.io-client';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
+import CommunicationButton from '@/components/CommunicationButton';
+import { communicationService } from '@/services/communicationService';
+import { socketService } from '@/services/socketService';
 import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
@@ -1174,18 +1177,15 @@ export default function CaptainDashboard() {
         .trim()
         .toUpperCase();
 
-    const socket =
-      io(API_URL, {
-        transports: [
-          'websocket',
-          'polling',
-        ],
-        reconnectionAttempts: 10,
-        timeout: 15000,
-      });
+    const socket = socketService.connect({
+      rideCode: code,
+      userName: displayCaptain,
+      role: 'captain',
+    });
 
-    socketRef.current =
-      socket;
+    socketRef.current = socket;
+    communicationService.setActiveRideCode(code);
+    communicationService.setActiveUser(null, displayCaptain);
 
     socket.on(
       'connect',
@@ -1461,9 +1461,11 @@ export default function CaptainDashboard() {
       const lng = Number(payload.location?.longitude ?? payload.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
+      const eventId = payload.eventId || payload.sosId || `${payload.userId || payload.name}_${payload.triggeredAt || 'active'}`;
+
       const event: SosEvent = {
-        eventId: payload.eventId || payload.sosId || String(Date.now()),
-        sosId: payload.sosId || payload.eventId,
+        eventId,
+        sosId: payload.sosId || payload.eventId || eventId,
         rideCode: payload.rideCode || rideCode || '',
         name: payload.name || payload.riderName || 'Ride Member',
         riderName: payload.riderName || payload.name,
@@ -1513,17 +1515,12 @@ export default function CaptainDashboard() {
     );
 
     return () => {
-      socket.off('connect');
       socket.off('locationsSnapshot');
       socket.off('locationUpdated');
       socket.off('userLeft');
       socket.off('sosAlert', handleSosEvent);
       socket.off('sosTriggered', handleSosEvent);
       socket.off('sosResolved');
-      socket.off('disconnect');
-      socket.off('connect_error');
-      socket.disconnect();
-      socketRef.current = null;
     };
   }, [rideCode, displayCaptain]);
 
@@ -2631,6 +2628,13 @@ export default function CaptainDashboard() {
                   : 'READY'}
               </Text>
             </View>
+
+            <CommunicationButton
+              rideCode={displayRideCode}
+              role="captain"
+              userName={displayCaptain}
+              size={34}
+            />
 
             <ProfileHeaderButton size={34} />
           </View>
@@ -4089,6 +4093,19 @@ export default function CaptainDashboard() {
                 →
               </Text>
             </TouchableOpacity>
+
+            {rideStarted && (
+              <SosButton
+                rideCode={displayRideCode}
+                role="captain"
+                userName={displayCaptain}
+                socket={socketRef.current}
+                onSosSent={(sos) => {
+                  setActiveSosEvent(sos);
+                }}
+                style={{ marginTop: 14 }}
+              />
+            )}
           </View>
 
           {/* =================================================

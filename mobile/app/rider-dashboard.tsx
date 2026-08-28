@@ -28,6 +28,9 @@ import { io, Socket } from 'socket.io-client';
 import { API_URL } from '@/constants/network';
 import { getCurrentUser } from '@/constants/auth';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
+import CommunicationButton from '@/components/CommunicationButton';
+import { communicationService } from '@/services/communicationService';
+import { socketService } from '@/services/socketService';
 import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
@@ -676,15 +679,16 @@ export default function RiderDashboard() {
     const code = String(rideCode).toUpperCase().trim();
     const name = String(riderName || currentUser?.name || 'Rider').trim();
 
-    console.log('RYDO: Connecting Rider Socket.IO to:', API_URL);
-
-    const socket = io(API_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
-      timeout: 15000,
+    const socket = socketService.connect({
+      rideCode: code,
+      userId: myMemberId,
+      userName: name,
+      role: 'rider',
     });
 
     socketRef.current = socket;
+    communicationService.setActiveRideCode(code);
+    communicationService.setActiveUser(myMemberId, name);
 
     socket.on('connect', () => {
       console.log('RYDO: Rider socket connected:', socket.id);
@@ -833,9 +837,11 @@ export default function RiderDashboard() {
       const lng = Number(payload.location?.longitude ?? payload.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
+      const eventId = payload.eventId || payload.sosId || `${payload.userId || payload.name}_${payload.triggeredAt || 'active'}`;
+
       const event: SosEvent = {
-        eventId: payload.eventId || payload.sosId || String(Date.now()),
-        sosId: payload.sosId || payload.eventId,
+        eventId,
+        sosId: payload.sosId || payload.eventId || eventId,
         rideCode: payload.rideCode || rideCode || '',
         name: payload.name || payload.riderName || 'Ride Member',
         riderName: payload.riderName || payload.name,
@@ -870,7 +876,6 @@ export default function RiderDashboard() {
     });
 
     return () => {
-      socket.off('connect');
       socket.off('locationsSnapshot');
       socket.off('locationUpdated');
       socket.off('ride:started', handleRideStarted);
@@ -878,9 +883,6 @@ export default function RiderDashboard() {
       socket.off('sosAlert', handleSosEvent);
       socket.off('sosTriggered', handleSosEvent);
       socket.off('sosResolved');
-      socket.off('disconnect');
-      socket.disconnect();
-      socketRef.current = null;
     };
   }, [rideCode, riderName, myMemberId]);
 
@@ -2753,6 +2755,13 @@ export default function RiderDashboard() {
 
                   </View>
 
+                  <CommunicationButton
+                    rideCode={displayCode}
+                    role="rider"
+                    userName={displayName}
+                    size={28}
+                  />
+
                   <ProfileHeaderButton size={28} />
                 </View>
 
@@ -3291,6 +3300,13 @@ export default function RiderDashboard() {
                     </Text>
 
                   </View>
+
+                  <CommunicationButton
+                    rideCode={displayCode}
+                    role="rider"
+                    userName={displayName}
+                    size={34}
+                  />
 
                   <ProfileHeaderButton size={34} />
                 </View>
