@@ -36,7 +36,6 @@ import * as Location from 'expo-location';
 import { Socket } from 'socket.io-client';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 import CommunicationButton from '@/components/CommunicationButton';
-import VoiceButton from '@/components/VoiceButton';
 import { communicationService } from '@/services/communicationService';
 import { socketService } from '@/services/socketService';
 import { SosButton } from '@/components/SosButton';
@@ -2630,13 +2629,6 @@ export default function CaptainDashboard() {
                   : 'READY'}
               </Text>
             </View>
-
-            <VoiceButton
-              rideCode={displayRideCode}
-              role="captain"
-              userName={displayCaptain}
-              size={34}
-            />
 
             <CommunicationButton
               rideCode={displayRideCode}
