@@ -26,7 +26,7 @@ import MapView, {
   Marker,
   Polyline,
   LatLng,
-  PROVIDER_GOOGLE,
+  UrlTile,
 } from 'react-native-maps';
 
 import * as Location from 'expo-location';
@@ -1815,8 +1815,8 @@ export default function LiveRideMap() {
           {location ? (
             <MapView
               ref={mapRef}
-              provider={PROVIDER_GOOGLE}
               style={styles.map}
+              mapType="none"
               onMapReady={() =>
                 setMapReady(true)
               }
@@ -1864,6 +1864,12 @@ export default function LiveRideMap() {
                 left: 0,
               }}
             >
+              <UrlTile
+                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maximumZ={19}
+                flipY={false}
+                zIndex={-1}
+              />
 
               {/* =====================================
                   BLUE ROAD ROUTE

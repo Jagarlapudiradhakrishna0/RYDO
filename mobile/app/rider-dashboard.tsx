@@ -39,8 +39,8 @@ import { SosEvent } from '@/services/sosService';
 import MapView, {
   Marker,
   Polyline,
-  PROVIDER_GOOGLE,
   Region,
+  UrlTile,
 } from 'react-native-maps';
 
 
@@ -1883,7 +1883,16 @@ export default function RiderDashboard() {
               loadingEnabled={true}
 
               toolbarEnabled={false}
+
+              mapType="none"
             >
+
+              <UrlTile
+                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maximumZ={19}
+                flipY={false}
+                zIndex={-1}
+              />
 
               {roadRoute.length > 1 && (
 
@@ -2489,26 +2498,19 @@ export default function RiderDashboard() {
               styles.fullMap
             }
 
-            provider={
-              PROVIDER_GOOGLE
-            }
-
-            initialRegion={
-              mapInitialRegion
-            }
-
-            showsUserLocation={false}
-
-            showsMyLocationButton={false}
-
-            showsCompass={false}
-
-            showsScale={false}
-
             loadingEnabled={true}
 
             toolbarEnabled={false}
+
+            mapType="none"
           >
+
+            <UrlTile
+              urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+              maximumZ={19}
+              flipY={false}
+              zIndex={-1}
+            />
 
             {/* BLUE ROAD ROUTE */}
 
