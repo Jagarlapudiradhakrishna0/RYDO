@@ -1,6 +1,6 @@
 import { Vibration } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { Audio } from 'expo-av';
+import { AudioModule } from 'expo-audio';
 
 export interface SosEvent {
   eventId?: string;
@@ -28,7 +28,7 @@ export interface SosEvent {
 }
 
 class SosEmergencyManager {
-  private activeSounds: Set<Audio.Sound> = new Set();
+  private activeSounds: Set<any> = new Set();
   private isSoundPlaying = false;
   private isVibrating = false;
   private hapticInterval: any = null;
@@ -79,50 +79,29 @@ class SosEmergencyManager {
 
       this.isLoadingAudio = true;
 
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-      }).catch(() => {});
-
       // Stop & unload any existing sound instances
       await this.unloadAllSounds();
 
-      // Check if user dismissed alert or 10s elapsed while setting audio mode
+      // Check if user dismissed alert or 10s elapsed
       if (!this.isAlertActive || Date.now() - this.alertStartTime >= 10000) {
         this.isLoadingAudio = false;
         return;
       }
 
-      // Public emergency alarm siren tone
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: 'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg' },
-        { shouldPlay: true, isLooping: true, volume: 1.0 }
-      );
-
-      this.isLoadingAudio = false;
-
-      // If alert was dismissed or 10s ended during async loading, stop & unload immediately
-      if (!this.isAlertActive || Date.now() - this.alertStartTime >= 10000) {
-        try {
-          await sound.stopAsync();
-          await sound.unloadAsync();
-        } catch (_) {}
-        return;
+      if (AudioModule && (AudioModule as any).AudioPlayer) {
+        const player = new (AudioModule as any).AudioPlayer(
+          { uri: 'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg' },
+          1000,
+          false,
+          0
+        );
+        player.loop = true;
+        player.play();
+        this.activeSounds.add(player);
+        this.isSoundPlaying = true;
       }
 
-      this.activeSounds.add(sound);
-      this.isSoundPlaying = true;
-
-      // Register status listener to catch unexpected playing states
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (!this.isAlertActive && status.isLoaded && (status as any).isPlaying) {
-          sound.stopAsync().catch(() => {});
-          sound.unloadAsync().catch(() => {});
-          this.activeSounds.delete(sound);
-        }
-      });
-
+      this.isLoadingAudio = false;
       console.log('[RYDO SOS] Emergency alarm audio started (Hard 10-second timer active)');
     } catch (error) {
       this.isLoadingAudio = false;
@@ -170,8 +149,8 @@ class SosEmergencyManager {
 
     for (const s of sounds) {
       try {
-        await s.stopAsync();
-        await s.unloadAsync();
+        if (s.pause) s.pause();
+        if (s.release) s.release();
       } catch (_) {}
     }
   }

@@ -1,4 +1,4 @@
-import { Audio } from 'expo-av';
+import { AudioModule } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { API_URL } from '@/constants/network';
 import { socketService, MessagePayload } from './socketService';
@@ -30,7 +30,7 @@ class CommunicationManager {
   private historyListeners = new Set<HistoryListener>();
   private currentUserId: string | null = null;
   private currentUserName: string | null = null;
-  private notificationSound: Audio.Sound | null = null;
+  private notificationPlayer: any = null;
   private isSoundLoaded = false;
 
   constructor() {
@@ -44,12 +44,15 @@ class CommunicationManager {
 
   private async preloadNotificationSound() {
     try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: 'https://actions.google.com/sounds/v1/communication/notification_high_intensity.ogg' },
-        { shouldPlay: false, volume: 0.85 }
-      );
-      this.notificationSound = sound;
-      this.isSoundLoaded = true;
+      if (AudioModule && (AudioModule as any).AudioPlayer) {
+        this.notificationPlayer = new (AudioModule as any).AudioPlayer(
+          { uri: 'https://actions.google.com/sounds/v1/communication/notification_high_intensity.ogg' },
+          1000,
+          false,
+          0
+        );
+        this.isSoundLoaded = true;
+      }
     } catch (_) {
       this.isSoundLoaded = false;
     }
@@ -171,9 +174,10 @@ class CommunicationManager {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
         }
 
-        if (this.notificationSound && this.isSoundLoaded) {
+        if (this.notificationPlayer && this.isSoundLoaded) {
           try {
-            await this.notificationSound.replayAsync();
+            this.notificationPlayer.seekTo(0);
+            this.notificationPlayer.play();
           } catch (_) {}
         }
       }
