@@ -39,6 +39,7 @@ import MapView, {
   Marker,
   Polyline,
   Region,
+  UrlTile,
 } from 'react-native-maps';
 
 
@@ -1881,7 +1882,15 @@ export default function RiderDashboard() {
               loadingEnabled={true}
 
               toolbarEnabled={false}
+
+              mapType="none"
             >
+              <UrlTile
+                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maximumZ={19}
+                flipY={false}
+                zIndex={-1}
+              />
 
               {roadRoute.length > 1 && (
 
@@ -2490,7 +2499,15 @@ export default function RiderDashboard() {
             loadingEnabled={true}
 
             toolbarEnabled={false}
+
+            mapType="none"
           >
+            <UrlTile
+              urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+              maximumZ={19}
+              flipY={false}
+              zIndex={-1}
+            />
 
             {/* BLUE ROAD ROUTE */}
 

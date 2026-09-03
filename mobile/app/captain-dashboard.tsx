@@ -28,6 +28,7 @@ import MapView, {
   Marker,
   Polyline,
   LatLng,
+  UrlTile,
 } from 'react-native-maps';
 
 import * as Location from 'expo-location';
@@ -2981,6 +2982,8 @@ export default function CaptainDashboard() {
                   false
                 }
 
+                mapType="none"
+
                 onMapReady={() =>
                   setMapReady(
                     true
@@ -3001,6 +3004,12 @@ export default function CaptainDashboard() {
                     0.05,
                 }}
               >
+                <UrlTile
+                  urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  maximumZ={19}
+                  flipY={false}
+                  zIndex={-1}
+                />
                 {/* =========================================
                     ROAD ROUTE
                 ========================================= */}
