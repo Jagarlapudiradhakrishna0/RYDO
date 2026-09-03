@@ -1879,7 +1879,7 @@ export default function RiderDashboard() {
 
               showsScale={true}
 
-              loadingEnabled={true}
+              loadingEnabled={false}
 
               toolbarEnabled={false}
 
@@ -2496,7 +2496,7 @@ export default function RiderDashboard() {
               styles.fullMap
             }
 
-            loadingEnabled={true}
+            loadingEnabled={false}
 
             toolbarEnabled={false}
 
