@@ -1159,20 +1159,9 @@ export default function LiveRideMap() {
         true;
 
       try {
-        setRouteLoading(true);
-
-        /*
-          Rider route:
-            Rider Current Location
-              → Start Point (if exists)
-              → Any Stops
-              → Destination
-
-          Captain route:
-            Captain Current Location
-              → Any Stops
-              → Destination
-        */
+        if (roadRoute.length === 0) {
+          setRouteLoading(true);
+        }
 
         /* Calculate points from current live location forward to destination */
         const points: RoutePoint[] = [
@@ -1213,7 +1202,7 @@ export default function LiveRideMap() {
 
         console.log(
           'RYDO: Requesting road route',
-          isRider ? '(Rider: includes Start Point)' : '(Captain)'
+          isRider ? '(Rider)' : '(Captain)'
         );
 
         const response =
@@ -1235,42 +1224,6 @@ export default function LiveRideMap() {
 
         const route =
           data.routes[0];
-
-
-        /* ---------------------------------------------
-           DISTANCE
-        --------------------------------------------- */
-
-        const distanceMeters =
-          Number(
-            route.distance || 0
-          );
-
-        const distance =
-          distanceMeters / 1000;
-
-
-        /* ---------------------------------------------
-           DURATION
-        --------------------------------------------- */
-
-        const durationSeconds =
-          Number(
-            route.duration || 0
-          );
-
-        const minutes =
-          Math.max(
-            1,
-            Math.round(
-              durationSeconds / 60
-            )
-          );
-
-
-        /* ---------------------------------------------
-           GEOMETRY
-        --------------------------------------------- */
 
         const geometry =
           route.geometry;
@@ -1314,14 +1267,6 @@ export default function LiveRideMap() {
 
         updateLiveRemainingDistance(location);
 
-        console.log(
-          'RYDO: Live route:',
-          distance.toFixed(1),
-          'km',
-          minutes,
-          'min'
-        );
-
       } catch (error) {
         console.log(
           'RYDO: OSRM error:',
@@ -1338,8 +1283,6 @@ export default function LiveRideMap() {
         }
       }
     }, [
-      location?.latitude,
-      location?.longitude,
       routeData.start?.latitude,
       routeData.start?.longitude,
       routeData.destination?.latitude,
@@ -1348,61 +1291,30 @@ export default function LiveRideMap() {
         routeData.stops
       ),
       isRider,
+      location?.latitude,
+      location?.longitude,
+      roadRoute.length,
+      updateLiveRemainingDistance,
     ]);
 
 
   /* ===================================================
-     LOAD ROUTE — when destination becomes available
+     LOAD ROUTE — when destination is available and roadRoute not yet loaded
   =================================================== */
 
   useEffect(() => {
     if (
-      location &&
-      routeData.destination
+      routeData.destination &&
+      roadRoute.length === 0
     ) {
       fetchRoadRoute();
     }
   }, [
-    location?.latitude,
-    location?.longitude,
     routeData.destination?.latitude,
     routeData.destination?.longitude,
     routeData.start?.latitude,
     routeData.start?.longitude,
-  ]);
-
-
-  /* ===================================================
-     UPDATE ROUTE WHILE MOVING
-  =================================================== */
-
-  useEffect(() => {
-    if (
-      !navigationMode
-    ) {
-      return;
-    }
-
-    if (
-      !location ||
-      !routeData.destination
-    ) {
-      return;
-    }
-
-    const interval =
-      setInterval(
-        () => {
-          fetchRoadRoute();
-        },
-        10000
-      );
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [
-    navigationMode,
+    roadRoute.length,
     fetchRoadRoute,
   ]);
 

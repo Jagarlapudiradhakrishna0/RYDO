@@ -232,6 +232,7 @@ const LEAFLET_HTML = `
     var routePolyline = null;
     var emergencyPolyline = null;
     var currentData = {};
+    var lastRouteHash = '';
 
     function initMap(lat, lng, zoom) {
       map = L.map('map', {
@@ -269,23 +270,30 @@ const LEAFLET_HTML = `
         var data = JSON.parse(jsonStr);
         currentData = data;
 
-        // 1. ROUTE POLYLINE (BLUE)
+        // 1. ROUTE POLYLINE (BLUE) - ONLY update when coordinates actually change to prevent blinking
         if (data.roadRoute && data.roadRoute.length > 1) {
-          var latlngs = data.roadRoute.map(function(c) { return [c.latitude, c.longitude]; });
-          if (routePolyline) {
-            routePolyline.setLatLngs(latlngs);
-          } else {
-            routePolyline = L.polyline(latlngs, {
-              color: '#1677FF',
-              weight: 6,
-              opacity: 0.95,
-              lineCap: 'round',
-              lineJoin: 'round'
-            }).addTo(map);
+          var firstPt = data.roadRoute[0] || {};
+          var lastPt = data.roadRoute[data.roadRoute.length - 1] || {};
+          var routeHash = data.roadRoute.length + '_' + Number(firstPt.latitude).toFixed(5) + '_' + Number(firstPt.longitude).toFixed(5) + '_' + Number(lastPt.latitude).toFixed(5) + '_' + Number(lastPt.longitude).toFixed(5);
+          if (lastRouteHash !== routeHash || !routePolyline) {
+            lastRouteHash = routeHash;
+            var latlngs = data.roadRoute.map(function(c) { return [c.latitude, c.longitude]; });
+            if (routePolyline) {
+              routePolyline.setLatLngs(latlngs);
+            } else {
+              routePolyline = L.polyline(latlngs, {
+                color: '#1677FF',
+                weight: 6,
+                opacity: 0.95,
+                lineCap: 'round',
+                lineJoin: 'round'
+              }).addTo(map);
+            }
           }
         } else if (routePolyline) {
           map.removeLayer(routePolyline);
           routePolyline = null;
+          lastRouteHash = '';
         }
 
         // 2. EMERGENCY SOS POLYLINE (RED)
