@@ -107,6 +107,10 @@ export default function LiveRideMap() {
     role,
     userName,
     riderName,
+    startParam,
+    destinationParam,
+    stopsParam,
+    initialRouteParam,
   } = useLocalSearchParams<{
     rideCode?: string;
     rideName?: string;
@@ -114,6 +118,10 @@ export default function LiveRideMap() {
     role?: string;
     userName?: string;
     riderName?: string;
+    startParam?: string;
+    destinationParam?: string;
+    stopsParam?: string;
+    initialRouteParam?: string;
   }>();
 
 
@@ -209,18 +217,72 @@ export default function LiveRideMap() {
 
 
   /* ===================================================
+     INITIAL ROUTE PARSING FROM PARAMS
+  =================================================== */
+
+  const initialRouteData: RouteData = useMemo(() => {
+    let start: RoutePoint | null = null;
+    let destination: RoutePoint | null = null;
+    let stops: RoutePoint[] = [];
+
+    try {
+      if (startParam) {
+        const p = JSON.parse(startParam);
+        if (p && Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude))) {
+          start = { name: p.name || 'Start', latitude: Number(p.latitude), longitude: Number(p.longitude) };
+        }
+      }
+    } catch {}
+
+    try {
+      if (destinationParam) {
+        const p = JSON.parse(destinationParam);
+        if (p && Number.isFinite(Number(p.latitude)) && Number.isFinite(Number(p.longitude))) {
+          destination = { name: p.name || 'Destination', latitude: Number(p.latitude), longitude: Number(p.longitude) };
+        }
+      }
+    } catch {}
+
+    try {
+      if (stopsParam) {
+        const p = JSON.parse(stopsParam);
+        if (Array.isArray(p)) {
+          stops = p
+            .filter((s: any) => s && Number.isFinite(Number(s.latitude)) && Number.isFinite(Number(s.longitude)))
+            .map((s: any) => ({ name: s.name || 'Stop', latitude: Number(s.latitude), longitude: Number(s.longitude) }));
+        }
+      }
+    } catch {}
+
+    return { start, destination, stops };
+  }, [startParam, destinationParam, stopsParam]);
+
+  const initialParsedRoute: LatLng[] = useMemo(() => {
+    try {
+      if (initialRouteParam) {
+        const parsed = JSON.parse(initialRouteParam);
+        if (Array.isArray(parsed) && parsed.length > 1) {
+          return parsed
+            .map((c: any) => ({
+              latitude: Number(c.latitude),
+              longitude: Number(c.longitude),
+            }))
+            .filter((c: any) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude));
+        }
+      }
+    } catch {}
+    return [];
+  }, [initialRouteParam]);
+
+  /* ===================================================
      ROUTE
   =================================================== */
 
   const [routeData, setRouteData] =
-    useState<RouteData>({
-      start: null,
-      destination: null,
-      stops: [],
-    });
+    useState<RouteData>(initialRouteData);
 
   const [roadRoute, setRoadRoute] =
-    useState<LatLng[]>([]);
+    useState<LatLng[]>(initialParsedRoute);
 
   const roadRouteRef = useRef(roadRoute);
   roadRouteRef.current = roadRoute;
@@ -286,6 +348,24 @@ export default function LiveRideMap() {
   const [liveMembers, setLiveMembers] =
     useState<Map<string, LiveMember>>(
       new Map()
+    );
+
+  const liveCaptainMember: LiveMember | null =
+    (() => {
+      for (const [, member] of liveMembers) {
+        if (member.role === 'captain') {
+          return member;
+        }
+      }
+
+      return null;
+    })();
+
+  const liveOtherRiders: LiveMember[] =
+    Array.from(liveMembers.values()).filter(
+      (member) =>
+        member.role === 'rider' &&
+        member.memberId !== myMemberId
     );
 
 
@@ -617,6 +697,37 @@ export default function LiveRideMap() {
       setEmergencyRoute([]);
     });
 
+    const handleRouteUpdated = (data: any) => {
+      console.log('[RYDO ROUTE] Live map received route update event:', data);
+      const newRoute = data.route || data.ride?.route;
+      if (newRoute) {
+        const dLat = Number(newRoute.destination?.latitude);
+        const dLng = Number(newRoute.destination?.longitude);
+        const sLat = Number(newRoute.start?.latitude);
+        const sLng = Number(newRoute.start?.longitude);
+        setRouteData({
+          start: newRoute.start && Number.isFinite(sLat) && Number.isFinite(sLng) ? { name: newRoute.start.name || 'Start', latitude: sLat, longitude: sLng } : null,
+          destination: newRoute.destination && Number.isFinite(dLat) && Number.isFinite(dLng) ? { name: newRoute.destination.name || 'Destination', latitude: dLat, longitude: dLng } : null,
+          stops: Array.isArray(newRoute.stops)
+            ? newRoute.stops
+                .filter((s: any) => s && Number.isFinite(Number(s.latitude)) && Number.isFinite(Number(s.longitude)))
+                .map((s: any) => ({ name: s.name || 'Stop', latitude: Number(s.latitude), longitude: Number(s.longitude) }))
+            : [],
+        });
+        if (Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
+          const parsed = newRoute.coordinates
+            .filter((c: any) => Number.isFinite(Number(c?.latitude)) && Number.isFinite(Number(c?.longitude)))
+            .map((c: any) => ({ latitude: Number(c.latitude), longitude: Number(c.longitude) }));
+          if (parsed.length > 1) {
+            setRoadRoute(parsed);
+            setRouteLoading(false);
+          }
+        }
+      }
+    };
+    socket.on('routeUpdated', handleRouteUpdated);
+    socket.on('route:updated', handleRouteUpdated);
+
     socket.on('disconnect', (reason: string) => {
       console.log(
         'RYDO: Socket disconnected:',
@@ -783,81 +894,71 @@ export default function LiveRideMap() {
       const backendRoute =
         ride?.route || {};
 
+      const startLat = Number(backendRoute.start?.latitude);
+      const startLng = Number(backendRoute.start?.longitude);
       const start =
-        backendRoute.start &&
-        typeof backendRoute.start.latitude ===
-          'number' &&
-        typeof backendRoute.start.longitude ===
-          'number'
+        backendRoute.start && Number.isFinite(startLat) && Number.isFinite(startLng)
           ? {
-              name:
-                backendRoute.start.name ||
-                'Start',
-
-              latitude:
-                backendRoute.start.latitude,
-
-              longitude:
-                backendRoute.start.longitude,
+              name: backendRoute.start.name || 'Start',
+              latitude: startLat,
+              longitude: startLng,
             }
           : null;
 
+      const destLat = Number(backendRoute.destination?.latitude);
+      const destLng = Number(backendRoute.destination?.longitude);
       const destination =
-        backendRoute.destination &&
-        typeof backendRoute.destination.latitude ===
-          'number' &&
-        typeof backendRoute.destination.longitude ===
-          'number'
+        backendRoute.destination && Number.isFinite(destLat) && Number.isFinite(destLng)
           ? {
-              name:
-                backendRoute.destination.name ||
-                'Destination',
-
-              latitude:
-                backendRoute.destination.latitude,
-
-              longitude:
-                backendRoute.destination.longitude,
+              name: backendRoute.destination.name || 'Destination',
+              latitude: destLat,
+              longitude: destLng,
             }
           : null;
 
-      const stops =
-        Array.isArray(
-          backendRoute.stops
-        )
-          ? backendRoute.stops
-              .filter(
-                (stop: any) =>
-                  stop &&
-                  typeof stop.latitude ===
-                    'number' &&
-                  typeof stop.longitude ===
-                    'number'
-              )
-              .map(
-                (stop: any) => ({
-                  name:
-                    stop.name ||
-                    'Stop',
+      const stops = Array.isArray(backendRoute.stops)
+        ? backendRoute.stops
+            .filter((stop: any) => {
+              const sLat = Number(stop?.latitude);
+              const sLng = Number(stop?.longitude);
+              return stop && Number.isFinite(sLat) && Number.isFinite(sLng);
+            })
+            .map((stop: any) => ({
+              name: stop.name || 'Stop',
+              latitude: Number(stop.latitude),
+              longitude: Number(stop.longitude),
+            }))
+        : [];
 
-                  latitude:
-                    stop.latitude,
-
-                  longitude:
-                    stop.longitude,
-                })
-              )
-          : [];
-
-      setRouteData({
-        start,
-        destination,
-        stops,
-      });
+      setRouteData((prev) => ({
+        start: start || prev.start,
+        destination: destination || prev.destination,
+        stops: stops.length > 0 ? stops : prev.stops,
+      }));
 
       if (Array.isArray(backendRoute.coordinates) && backendRoute.coordinates.length > 1) {
-        setRoadRoute(backendRoute.coordinates);
-        setRouteLoading(false);
+        const parsedCoords: LatLng[] = backendRoute.coordinates
+          .filter((c: any) => Number.isFinite(Number(c?.latitude)) && Number.isFinite(Number(c?.longitude)))
+          .map((c: any) => ({ latitude: Number(c.latitude), longitude: Number(c.longitude) }));
+        if (parsedCoords.length > 1 && roadRouteRef.current.length === 0) {
+          setRoadRoute(parsedCoords);
+          setRouteLoading(false);
+        }
+      }
+
+      if (ride?.captainLocation && Number.isFinite(Number(ride.captainLocation.latitude)) && Number.isFinite(Number(ride.captainLocation.longitude))) {
+        setLiveMembers((prev) => {
+          const next = new Map(prev);
+          next.set('captain-main', {
+            memberId: 'captain-main',
+            userName: displayCaptain || 'Captain',
+            role: 'captain',
+            latitude: Number(ride.captainLocation.latitude),
+            longitude: Number(ride.captainLocation.longitude),
+            updatedAt: new Date().toISOString(),
+          });
+          return next;
+        });
       }
 
       if (backendRoute.distanceMeters && Number(backendRoute.distanceMeters) > 0) {
@@ -1144,34 +1245,31 @@ export default function LiveRideMap() {
 
   const fetchRoadRoute =
     useCallback(async () => {
-      if (
-        !routeData.destination
-      ) {
-        setRoadRoute([]);
+      const targetDest =
+        routeData.destination ||
+        (liveCaptainMember ? { latitude: liveCaptainMember.latitude, longitude: liveCaptainMember.longitude, name: 'Captain' } : null) ||
+        routeData.start;
+
+      if (!targetDest) {
         return;
       }
 
-      if (
-        !location
-      ) {
+      if (!location) {
         return;
       }
 
-      if (
-        routeRequestRunning.current
-      ) {
+      if (routeRequestRunning.current) {
         return;
       }
 
-      routeRequestRunning.current =
-        true;
+      routeRequestRunning.current = true;
 
       try {
         if (roadRoute.length === 0) {
           setRouteLoading(true);
         }
 
-        /* Calculate points from current live location forward to destination */
+        /* Calculate points from current live location forward to target */
         const points: RoutePoint[] = [
           {
             name: 'Current Location',
@@ -1180,113 +1278,92 @@ export default function LiveRideMap() {
           },
         ];
 
-        /* Include start point if rider is still approaching start location */
-        if (routeData.start) {
+        /* Include start point if rider is still approaching start location and start is not the target */
+        if (routeData.start && targetDest !== routeData.start) {
           const distToStart = calculateDistance(location.latitude, location.longitude, routeData.start.latitude, routeData.start.longitude);
-          const distToDest = calculateDistance(location.latitude, location.longitude, routeData.destination.latitude, routeData.destination.longitude);
-          const startToDest = calculateDistance(routeData.start.latitude, routeData.start.longitude, routeData.destination.latitude, routeData.destination.longitude);
-          if (distToStart > 0.1 && distToDest >= startToDest * 0.9) {
+          const distToDest = calculateDistance(location.latitude, location.longitude, targetDest.latitude, targetDest.longitude);
+          const startToDest = calculateDistance(routeData.start.latitude, routeData.start.longitude, targetDest.latitude, targetDest.longitude);
+          if (distToStart > 0.05 && distToDest >= startToDest * 0.85) {
             points.push(routeData.start);
           }
         }
 
         /* Intermediate stops */
-        points.push(...routeData.stops);
+        (routeData.stops || []).forEach((stop) => {
+          if (stop && Number.isFinite(Number(stop.latitude)) && Number.isFinite(Number(stop.longitude))) {
+            points.push(stop);
+          }
+        });
 
-        /* Destination */
-        points.push(routeData.destination!);
+        /* Target Destination or Captain */
+        points.push(targetDest);
 
-        const coordinates =
-          points
-            .map(
-              (point) =>
-                `${point.longitude},${point.latitude}`
-            )
-            .join(';');
-
-        const url =
-          `${OSRM_URL}/${coordinates}` +
-          `?overview=full&geometries=geojson`;
-
-        console.log(
-          'RYDO: Requesting road route',
-          isRider ? '(Rider)' : '(Captain)'
+        const validPoints = points.filter(
+          (point) => point && Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude))
         );
 
-        const response =
-          await fetch(url);
-
-        const data =
-          await response.json();
-
-        if (
-          !response.ok ||
-          data.code !== 'Ok' ||
-          !data.routes ||
-          data.routes.length === 0
-        ) {
-          throw new Error(
-            'Unable to calculate route'
-          );
-        }
-
-        const route =
-          data.routes[0];
-
-        const geometry =
-          route.geometry;
-
-        if (
-          !geometry ||
-          !Array.isArray(
-            geometry.coordinates
-          )
-        ) {
-          throw new Error(
-            'Invalid route geometry'
-          );
-        }
-
-        const routeCoordinates =
-          geometry.coordinates.map(
-            (
-              coordinate: [
-                number,
-                number
-              ]
-            ) => ({
-              longitude:
-                coordinate[0],
-
-              latitude:
-                coordinate[1],
-            })
-          );
-
-        if (
-          !mountedRef.current
-        ) {
+        if (validPoints.length < 2) {
           return;
         }
 
-        setRoadRoute(
-          routeCoordinates
-        );
+        const coordinates = validPoints
+          .map((point) => `${Number(point.longitude).toFixed(5)},${Number(point.latitude).toFixed(5)}`)
+          .join(';');
 
-        updateLiveRemainingDistance(location);
+        const url = `${OSRM_URL}/${coordinates}?overview=full&geometries=geojson&steps=true&alternatives=false`;
 
-      } catch (error) {
         console.log(
-          'RYDO: OSRM error:',
-          error
+          'RYDO: Requesting road route in live map:',
+          url,
+          isRider ? '(Rider)' : '(Captain)'
         );
-      } finally {
-        routeRequestRunning.current =
-          false;
 
-        if (
-          mountedRef.current
-        ) {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!response.ok || data.code !== 'Ok' || !data.routes || data.routes.length === 0) {
+          throw new Error('OSRM routing failed');
+        }
+
+        const route = data.routes[0];
+        const geometry = route.geometry;
+
+        if (!geometry || !Array.isArray(geometry.coordinates)) {
+          throw new Error('Invalid route geometry');
+        }
+
+        const routeCoordinates: LatLng[] = geometry.coordinates.map(
+          (coordinate: [number, number]) => ({
+            longitude: coordinate[0],
+            latitude: coordinate[1],
+          })
+        );
+
+        if (!mountedRef.current) {
+          return;
+        }
+
+        setRoadRoute(routeCoordinates);
+        updateLiveRemainingDistance(location);
+      } catch (error) {
+        console.log('RYDO: OSRM error in live map:', error);
+        // Straight-line fallback so the route polyline is NEVER blank on screen
+        const target =
+          routeData.destination ||
+          (liveCaptainMember ? { latitude: liveCaptainMember.latitude, longitude: liveCaptainMember.longitude, name: 'Captain' } : null) ||
+          routeData.start;
+
+        if (location && target && mountedRef.current) {
+          const fallbackCoords: LatLng[] = [
+            { latitude: location.latitude, longitude: location.longitude },
+            ...(routeData.stops || []).map((s) => ({ latitude: Number(s.latitude), longitude: Number(s.longitude) })),
+            { latitude: Number(target.latitude), longitude: Number(target.longitude) },
+          ];
+          setRoadRoute(fallbackCoords);
+        }
+      } finally {
+        routeRequestRunning.current = false;
+        if (mountedRef.current) {
           setRouteLoading(false);
         }
       }
@@ -1295,9 +1372,9 @@ export default function LiveRideMap() {
       routeData.start?.longitude,
       routeData.destination?.latitude,
       routeData.destination?.longitude,
-      JSON.stringify(
-        routeData.stops
-      ),
+      JSON.stringify(routeData.stops),
+      liveCaptainMember?.latitude,
+      liveCaptainMember?.longitude,
       isRider,
       location?.latitude,
       location?.longitude,
@@ -1305,16 +1382,13 @@ export default function LiveRideMap() {
       updateLiveRemainingDistance,
     ]);
 
-
   /* ===================================================
-     LOAD ROUTE — when destination is available and roadRoute not yet loaded
+     LOAD ROUTE — when target is available and roadRoute not yet loaded
   =================================================== */
 
   useEffect(() => {
-    if (
-      routeData.destination &&
-      roadRoute.length === 0
-    ) {
+    const hasTarget = Boolean(routeData.destination || liveCaptainMember || routeData.start);
+    if (hasTarget && roadRoute.length === 0 && location) {
       fetchRoadRoute();
     }
   }, [
@@ -1322,6 +1396,10 @@ export default function LiveRideMap() {
     routeData.destination?.longitude,
     routeData.start?.latitude,
     routeData.start?.longitude,
+    liveCaptainMember?.latitude,
+    liveCaptainMember?.longitude,
+    location?.latitude,
+    location?.longitude,
     roadRoute.length,
     fetchRoadRoute,
   ]);
@@ -1738,27 +1816,6 @@ export default function LiveRideMap() {
     };
 
 
-  /* ===================================================
-     COMPUTED: Live Captain & Other Riders
-  =================================================== */
-
-  const liveCaptainMember: LiveMember | null =
-    (() => {
-      for (const [, member] of liveMembers) {
-        if (member.role === 'captain') {
-          return member;
-        }
-      }
-
-      return null;
-    })();
-
-  const liveOtherRiders: LiveMember[] =
-    Array.from(liveMembers.values()).filter(
-      (member) =>
-        member.role === 'rider' &&
-        member.memberId !== myMemberId
-    );
 
 
   /* ===================================================

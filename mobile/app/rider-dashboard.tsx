@@ -716,11 +716,15 @@ export default function RiderDashboard() {
             role: 'rider',
             userName: String(riderName || currentUser?.name || 'Rider').trim(),
             userId: myMemberId,
+            startParam: route.start ? JSON.stringify(route.start) : undefined,
+            destinationParam: route.destination ? JSON.stringify(route.destination) : undefined,
+            stopsParam: route.stops && route.stops.length > 0 ? JSON.stringify(route.stops) : undefined,
+            initialRouteParam: roadRoute && roadRoute.length > 1 ? JSON.stringify(roadRoute) : undefined,
           },
         });
       }, 0);
     },
-    [rideCode, displayRideName, displayCaptain, riderName, currentUser?.name, myMemberId]
+    [rideCode, displayRideName, displayCaptain, riderName, currentUser?.name, myMemberId, route.start, route.destination, route.stops, roadRoute]
   );
 
 
@@ -1550,6 +1554,18 @@ export default function RiderDashboard() {
 
           userName:
             String(riderName || '').trim(),
+
+          startParam:
+            route.start ? JSON.stringify(route.start) : undefined,
+
+          destinationParam:
+            route.destination ? JSON.stringify(route.destination) : undefined,
+
+          stopsParam:
+            route.stops && route.stops.length > 0 ? JSON.stringify(route.stops) : undefined,
+
+          initialRouteParam:
+            roadRoute && roadRoute.length > 1 ? JSON.stringify(roadRoute) : undefined,
         },
       });
     };
