@@ -872,6 +872,107 @@ export default function LiveRideMap() {
 
 
   /* ===================================================
+     CALCULATE DISTANCE (HAVERSINE)
+  =================================================== */
+
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    const earthRadius = 6371; // km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadius * c;
+  };
+
+  /* ===================================================
+     UPDATE LIVE REMAINING ROUTE & DISTANCE FROM CURRENT LIVE LOCATION
+  =================================================== */
+
+  const updateLiveRemainingDistance = useCallback(
+    (currentCoords: { latitude: number; longitude: number; speed?: number | null }) => {
+      if (!currentCoords || !routeData.destination) return;
+
+      if (roadRoute.length > 1) {
+        let nearestIdx = 0;
+        let minD = Infinity;
+        for (let i = 0; i < roadRoute.length; i++) {
+          const d = calculateDistance(
+            currentCoords.latitude,
+            currentCoords.longitude,
+            roadRoute[i].latitude,
+            roadRoute[i].longitude
+          );
+          if (d < minD) {
+            minD = d;
+            nearestIdx = i;
+          }
+        }
+
+        let remainingKm = calculateDistance(
+          currentCoords.latitude,
+          currentCoords.longitude,
+          roadRoute[nearestIdx].latitude,
+          roadRoute[nearestIdx].longitude
+        );
+
+        for (let i = nearestIdx; i < roadRoute.length - 1; i++) {
+          remainingKm += calculateDistance(
+            roadRoute[i].latitude,
+            roadRoute[i].longitude,
+            roadRoute[i + 1].latitude,
+            roadRoute[i + 1].longitude
+          );
+        }
+
+        setDistanceKm(remainingKm);
+        const currentSpeedKmh =
+          currentCoords.speed && currentCoords.speed > 1.4
+            ? currentCoords.speed * 3.6
+            : 40;
+        const etaMinutes = Math.max(1, Math.round((remainingKm / currentSpeedKmh) * 60));
+        setDurationMinutes(etaMinutes);
+        setRouteLoading(false);
+      } else {
+        let directKm =
+          calculateDistance(
+            currentCoords.latitude,
+            currentCoords.longitude,
+            routeData.destination.latitude,
+            routeData.destination.longitude
+          ) * 1.25;
+
+        if (routeData.stops && routeData.stops.length > 0) {
+          let lastLat = currentCoords.latitude;
+          let lastLon = currentCoords.longitude;
+          let totalStopKm = 0;
+          for (const stop of routeData.stops) {
+            totalStopKm += calculateDistance(lastLat, lastLon, stop.latitude, stop.longitude) * 1.25;
+            lastLat = stop.latitude;
+            lastLon = stop.longitude;
+          }
+          totalStopKm += calculateDistance(lastLat, lastLon, routeData.destination.latitude, routeData.destination.longitude) * 1.25;
+          directKm = totalStopKm;
+        }
+
+        setDistanceKm(directKm);
+        const etaMinutes = Math.max(1, Math.round((directKm / 40) * 60));
+        setDurationMinutes(etaMinutes);
+      }
+    },
+    [roadRoute, routeData.destination, routeData.stops]
+  );
+
+  /* ===================================================
      LOCATION TRACKING
   =================================================== */
 
@@ -922,6 +1023,8 @@ export default function LiveRideMap() {
             current.coords
           );
 
+          updateLiveRemainingDistance(current.coords);
+
           if (
             typeof current.coords.heading ===
             'number' &&
@@ -958,6 +1061,7 @@ export default function LiveRideMap() {
                   newLocation.coords;
 
                 setLocation(coords);
+                updateLiveRemainingDistance(coords);
 
                 if (
                   typeof coords.heading ===
@@ -1070,24 +1174,23 @@ export default function LiveRideMap() {
               → Destination
         */
 
+        /* Calculate points from current live location forward to destination */
         const points: RoutePoint[] = [
           {
             name: 'Current Location',
-
-            latitude:
-              location.latitude,
-
-            longitude:
-              location.longitude,
+            latitude: location.latitude,
+            longitude: location.longitude,
           },
         ];
 
-        /* Add Start Point for riders */
-        if (
-          isRider &&
-          routeData.start
-        ) {
-          points.push(routeData.start);
+        /* Include start point if rider is still approaching start location */
+        if (routeData.start) {
+          const distToStart = calculateDistance(location.latitude, location.longitude, routeData.start.latitude, routeData.start.longitude);
+          const distToDest = calculateDistance(location.latitude, location.longitude, routeData.destination.latitude, routeData.destination.longitude);
+          const startToDest = calculateDistance(routeData.start.latitude, routeData.start.longitude, routeData.destination.latitude, routeData.destination.longitude);
+          if (distToStart > 0.1 && distToDest >= startToDest * 0.9) {
+            points.push(routeData.start);
+          }
         }
 
         /* Intermediate stops */
@@ -1209,13 +1312,7 @@ export default function LiveRideMap() {
           routeCoordinates
         );
 
-        setDistanceKm(
-          distance
-        );
-
-        setDurationMinutes(
-          minutes
-        );
+        updateLiveRemainingDistance(location);
 
         console.log(
           'RYDO: Live route:',

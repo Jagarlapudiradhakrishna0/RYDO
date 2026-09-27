@@ -31,8 +31,16 @@ function generateRideCode() {
 ===================================================== */
 
 async function geocodeLocation(locationName) {
+  if (locationName && typeof locationName === 'object' && Number.isFinite(Number(locationName.latitude)) && Number.isFinite(Number(locationName.longitude))) {
+    return {
+      name: locationName.name || 'Location',
+      latitude: Number(locationName.latitude),
+      longitude: Number(locationName.longitude),
+    };
+  }
+
   const query =
-    String(locationName).trim();
+    String(locationName?.name || locationName || '').trim();
 
   if (!query) {
     throw new Error(
@@ -703,7 +711,7 @@ router.patch(
 
       if (
         !start ||
-        !String(start).trim()
+        (typeof start === 'string' && !start.trim())
       ) {
         return res.status(400).json({
           success: false,
@@ -715,7 +723,7 @@ router.patch(
 
       if (
         !destination ||
-        !String(destination).trim()
+        (typeof destination === 'string' && !destination.trim())
       ) {
         return res.status(400).json({
           success: false,

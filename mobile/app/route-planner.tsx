@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
+import * as Location from 'expo-location';
 import { API_URL } from '@/constants/network';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 
@@ -30,6 +31,49 @@ export default function RoutePlanner() {
   const [stops, setStops] = useState<string[]>([]);
   const [newStop, setNewStop] = useState('');
   const [saving, setSaving] = useState(false);
+  const [liveCoords, setLiveCoords] = useState<{ latitude: number; longitude: number; name: string } | null>(null);
+  const [loadingGps, setLoadingGps] = useState(false);
+
+  const handleUseCurrentLocation = async () => {
+    try {
+      setLoadingGps(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Please grant location permissions to use your current location.');
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      let placeName = 'Current Location';
+      try {
+        const reverse = await Location.reverseGeocodeAsync({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        if (reverse && reverse.length > 0) {
+          const r = reverse[0];
+          placeName = [r.name, r.street, r.city || r.subregion].filter(Boolean).join(', ') || 'Current Location';
+        }
+      } catch (e) {
+        console.log('Reverse geocode error:', e);
+      }
+
+      setLiveCoords({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        name: placeName,
+      });
+      setStartLocation(placeName);
+    } catch (err: any) {
+      console.log('GPS error:', err);
+      Alert.alert('GPS Error', 'Could not obtain current location.');
+    } finally {
+      setLoadingGps(false);
+    }
+  };
 
   /* =========================
      ADD STOP
@@ -111,7 +155,7 @@ export default function RoutePlanner() {
             Accept: 'application/json',
           },
           body: JSON.stringify({
-            start: start,
+            start: (liveCoords && startLocation === liveCoords.name) ? liveCoords : start,
             destination: end,
             stops: stops,
           }),
@@ -287,9 +331,20 @@ export default function RoutePlanner() {
 
           <View style={styles.section}>
 
-            <Text style={styles.label}>
-              START LOCATION
-            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <Text style={styles.label}>
+                START LOCATION
+              </Text>
+              <TouchableOpacity
+                onPress={handleUseCurrentLocation}
+                disabled={loadingGps}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 3, paddingHorizontal: 8, backgroundColor: 'rgba(22, 119, 255, 0.15)', borderRadius: 4, borderWidth: 1, borderColor: '#1677FF' }}
+              >
+                <Text style={{ color: '#1677FF', fontSize: 10, fontWeight: '700' }}>
+                  {loadingGps ? 'LOCATING...' : '📍 CURRENT LOCATION'}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             <View style={styles.inputRow}>
 
