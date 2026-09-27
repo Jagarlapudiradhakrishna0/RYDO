@@ -702,18 +702,20 @@ export default function RiderDashboard() {
       console.log('[RIDESTART] Rider received instant ride start event:', data);
       if (hasNavigatedToLiveMapRef.current) return;
       hasNavigatedToLiveMapRef.current = true;
-      setRide((prev) => (prev ? { ...prev, isStarted: true, status: 'live' } : prev));
-      router.push({
-        pathname: '/live-ride-map' as any,
-        params: {
-          rideCode: code,
-          rideName: data?.ride?.rideName || displayRideName,
-          captainName: data?.ride?.captainName || displayCaptain,
-          role: 'rider',
-          userName: String(riderName || currentUser?.name || 'Rider').trim(),
-          userId: myMemberId,
-        },
-      });
+
+      setTimeout(() => {
+        router.replace({
+          pathname: '/live-ride-map' as any,
+          params: {
+            rideCode: code,
+            rideName: data?.ride?.rideName || displayRideName,
+            captainName: data?.ride?.captainName || displayCaptain,
+            role: 'rider',
+            userName: String(riderName || currentUser?.name || 'Rider').trim(),
+            userId: myMemberId,
+          },
+        });
+      }, 0);
     },
     [rideCode, displayRideName, displayCaptain, riderName, currentUser?.name, myMemberId]
   );

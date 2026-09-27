@@ -222,6 +222,12 @@ export default function LiveRideMap() {
   const [roadRoute, setRoadRoute] =
     useState<LatLng[]>([]);
 
+  const roadRouteRef = useRef(roadRoute);
+  roadRouteRef.current = roadRoute;
+
+  const routeDataRef = useRef(routeData);
+  routeDataRef.current = routeData;
+
   const [routeLoading, setRouteLoading] =
     useState(true);
 
@@ -900,17 +906,19 @@ export default function LiveRideMap() {
 
   const updateLiveRemainingDistance = useCallback(
     (currentCoords: { latitude: number; longitude: number; speed?: number | null }) => {
-      if (!currentCoords || !routeData.destination) return;
+      const currentRouteData = routeDataRef.current;
+      const currentRoadRoute = roadRouteRef.current;
+      if (!currentCoords || !currentRouteData.destination) return;
 
-      if (roadRoute.length > 1) {
+      if (currentRoadRoute.length > 1) {
         let nearestIdx = 0;
         let minD = Infinity;
-        for (let i = 0; i < roadRoute.length; i++) {
+        for (let i = 0; i < currentRoadRoute.length; i++) {
           const d = calculateDistance(
             currentCoords.latitude,
             currentCoords.longitude,
-            roadRoute[i].latitude,
-            roadRoute[i].longitude
+            currentRoadRoute[i].latitude,
+            currentRoadRoute[i].longitude
           );
           if (d < minD) {
             minD = d;
@@ -921,16 +929,16 @@ export default function LiveRideMap() {
         let remainingKm = calculateDistance(
           currentCoords.latitude,
           currentCoords.longitude,
-          roadRoute[nearestIdx].latitude,
-          roadRoute[nearestIdx].longitude
+          currentRoadRoute[nearestIdx].latitude,
+          currentRoadRoute[nearestIdx].longitude
         );
 
-        for (let i = nearestIdx; i < roadRoute.length - 1; i++) {
+        for (let i = nearestIdx; i < currentRoadRoute.length - 1; i++) {
           remainingKm += calculateDistance(
-            roadRoute[i].latitude,
-            roadRoute[i].longitude,
-            roadRoute[i + 1].latitude,
-            roadRoute[i + 1].longitude
+            currentRoadRoute[i].latitude,
+            currentRoadRoute[i].longitude,
+            currentRoadRoute[i + 1].latitude,
+            currentRoadRoute[i + 1].longitude
           );
         }
 
@@ -947,20 +955,20 @@ export default function LiveRideMap() {
           calculateDistance(
             currentCoords.latitude,
             currentCoords.longitude,
-            routeData.destination.latitude,
-            routeData.destination.longitude
+            currentRouteData.destination.latitude,
+            currentRouteData.destination.longitude
           ) * 1.25;
 
-        if (routeData.stops && routeData.stops.length > 0) {
+        if (currentRouteData.stops && currentRouteData.stops.length > 0) {
           let lastLat = currentCoords.latitude;
           let lastLon = currentCoords.longitude;
           let totalStopKm = 0;
-          for (const stop of routeData.stops) {
+          for (const stop of currentRouteData.stops) {
             totalStopKm += calculateDistance(lastLat, lastLon, stop.latitude, stop.longitude) * 1.25;
             lastLat = stop.latitude;
             lastLon = stop.longitude;
           }
-          totalStopKm += calculateDistance(lastLat, lastLon, routeData.destination.latitude, routeData.destination.longitude) * 1.25;
+          totalStopKm += calculateDistance(lastLat, lastLon, currentRouteData.destination.latitude, currentRouteData.destination.longitude) * 1.25;
           directKm = totalStopKm;
         }
 
@@ -969,7 +977,7 @@ export default function LiveRideMap() {
         setDurationMinutes(etaMinutes);
       }
     },
-    [roadRoute, routeData.destination, routeData.stops]
+    []
   );
 
   /* ===================================================
