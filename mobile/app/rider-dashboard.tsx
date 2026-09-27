@@ -208,6 +208,9 @@ export default function RiderDashboard() {
   ] =
     useState<Coordinate | null>(null);
 
+  const riderLocationRef = useRef<Coordinate | null>(null);
+  riderLocationRef.current = riderLocation;
+
 
   /* ===================================================
      CAPTAIN GPS
@@ -872,7 +875,7 @@ export default function RiderDashboard() {
       const newRoute = data.route || data.ride?.route;
       if (newRoute) {
         setRide((prev) => (prev ? { ...prev, route: newRoute } : prev));
-        if (Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
+        if (!riderLocationRef.current && Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
           setRoadRoute(newRoute.coordinates);
           setRouteLoading(false);
           setRouteError(false);
@@ -892,7 +895,7 @@ export default function RiderDashboard() {
         if (data.ride.isStarted || data.ride.status === 'live') {
           handleRideStarted(data);
         }
-        if (Array.isArray(data.ride.route?.coordinates) && data.ride.route.coordinates.length > 1) {
+        if (!riderLocationRef.current && Array.isArray(data.ride.route?.coordinates) && data.ride.route.coordinates.length > 1) {
           setRoadRoute(data.ride.route.coordinates);
           setRouteLoading(false);
           setRouteError(false);
@@ -989,6 +992,7 @@ export default function RiderDashboard() {
       }
 
       if (
+        !riderLocationRef.current &&
         Array.isArray(fetchedRide.route?.coordinates) &&
         fetchedRide.route.coordinates.length > 1
       ) {
@@ -1122,20 +1126,101 @@ export default function RiderDashboard() {
 
 
   /* ===================================================
+     DISTANCE UTILITY
+  =================================================== */
+
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    const earthRadius = 6371; // km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadius * c;
+  };
+
+  /* ===================================================
      ROUTE WAYPOINTS KEY (Memoized coordinate string)
+     Calculates route starting from Rider's live location
   =================================================== */
 
   const routeWaypointsKey = useMemo(() => {
-    if (!route.start || !route.destination) {
+    if (!route.start && !route.destination) {
       return '';
     }
 
     const pts: string[] = [];
 
+    // If rider's live GPS is available, always start the route from Rider's current location!
     if (
+      riderLocation &&
+      Number.isFinite(riderLocation.latitude) &&
+      Number.isFinite(riderLocation.longitude)
+    ) {
+      pts.push(
+        `${riderLocation.longitude.toFixed(5)},${riderLocation.latitude.toFixed(5)}`
+      );
+
+      // If route.start exists, check whether rider still needs to navigate to start point
+      if (
+        route.start &&
+        Number.isFinite(route.start.latitude) &&
+        Number.isFinite(route.start.longitude)
+      ) {
+        const distToStart = calculateDistance(
+          riderLocation.latitude,
+          riderLocation.longitude,
+          route.start.latitude,
+          route.start.longitude
+        );
+
+        let includeStart = distToStart > 0.05; // further than 50 meters away
+
+        if (
+          includeStart &&
+          route.destination &&
+          Number.isFinite(route.destination.latitude) &&
+          Number.isFinite(route.destination.longitude)
+        ) {
+          const distToDest = calculateDistance(
+            riderLocation.latitude,
+            riderLocation.longitude,
+            route.destination.latitude,
+            route.destination.longitude
+          );
+          const startToDest = calculateDistance(
+            route.start.latitude,
+            route.start.longitude,
+            route.destination.latitude,
+            route.destination.longitude
+          );
+          // If rider is already significantly closer to destination than start-to-dest, omit start
+          if (distToDest < startToDest * 0.8 && distToStart > 0.5) {
+            includeStart = false;
+          }
+        }
+
+        if (includeStart) {
+          pts.push(
+            `${route.start.longitude.toFixed(5)},${route.start.latitude.toFixed(5)}`
+          );
+        }
+      }
+    } else if (
+      route.start &&
       Number.isFinite(route.start.latitude) &&
       Number.isFinite(route.start.longitude)
     ) {
+      // Fallback: If rider GPS is not yet acquired, route from planned start
       pts.push(
         `${route.start.longitude.toFixed(5)},${route.start.latitude.toFixed(5)}`
       );
@@ -1154,6 +1239,7 @@ export default function RiderDashboard() {
     });
 
     if (
+      route.destination &&
       Number.isFinite(route.destination.latitude) &&
       Number.isFinite(route.destination.longitude)
     ) {
@@ -1164,6 +1250,9 @@ export default function RiderDashboard() {
 
     return pts.length >= 2 ? pts.join(';') : '';
   }, [
+    riderLocation
+      ? `${riderLocation.latitude.toFixed(4)},${riderLocation.longitude.toFixed(4)}`
+      : null,
     route.start?.latitude,
     route.start?.longitude,
     JSON.stringify(
@@ -1185,8 +1274,8 @@ export default function RiderDashboard() {
   useEffect(() => {
     let cancelled = false;
 
-    // 1. If backend already sent full road route coordinates, use them directly
-    if (Array.isArray((ride?.route as any)?.coordinates) && (ride?.route as any).coordinates.length > 1) {
+    // 1. If backend already sent full road route coordinates and we have NO rider location, use them directly as fallback
+    if (!riderLocation && Array.isArray((ride?.route as any)?.coordinates) && (ride?.route as any).coordinates.length > 1) {
       setRoadRoute((ride?.route as any).coordinates);
       setRouteLoading(false);
       setRouteError(false);
@@ -1212,7 +1301,7 @@ export default function RiderDashboard() {
         setRouteError(false);
 
         const url = `${OSRM_URL}/${routeWaypointsKey}?overview=full&geometries=geojson&steps=true&alternatives=false`;
-        console.log('RYDO ROUTING:', url);
+        console.log('RYDO ROUTING (Rider Live Location):', url);
 
         const response = await fetch(url);
         if (!response.ok) {
@@ -1243,8 +1332,17 @@ export default function RiderDashboard() {
       } catch (error) {
         console.log('RYDO ROUTING ERROR:', error);
         if (!cancelled) {
-          // If start and destination are known, generate a straight path fallback
-          if (route.start && route.destination) {
+          // If riderLocation and destination (or start) are known, generate a straight path fallback from rider location
+          if (riderLocation && (route.destination || route.start)) {
+            const fallbackPoints: Coordinate[] = [
+              { latitude: riderLocation.latitude, longitude: riderLocation.longitude },
+            ];
+            if (route.start) fallbackPoints.push({ latitude: route.start.latitude, longitude: route.start.longitude });
+            (route.stops || []).forEach((s) => fallbackPoints.push({ latitude: s.latitude, longitude: s.longitude }));
+            if (route.destination) fallbackPoints.push({ latitude: route.destination.latitude, longitude: route.destination.longitude });
+            setRoadRoute(fallbackPoints);
+            setRouteError(false);
+          } else if (route.start && route.destination) {
             setRoadRoute([
               { latitude: route.start.latitude, longitude: route.start.longitude },
               ...(route.stops || []).map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
@@ -1268,7 +1366,7 @@ export default function RiderDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [routeWaypointsKey, (ride?.route as any)?.coordinates]);
+  }, [routeWaypointsKey, riderLocation, (ride?.route as any)?.coordinates]);
 
   /* ===================================================
      EMERGENCY SOS ROUTE TO INCIDENT LOCATION
