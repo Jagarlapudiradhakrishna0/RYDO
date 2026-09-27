@@ -86,14 +86,17 @@ app.use(
 app.use(express.json());
 
 /* =====================================================
-   REQUEST LOGGER
+   REQUEST LOGGER & PERFORMANCE MONITOR
 ===================================================== */
 
 app.use((req, res, next) => {
-  console.log(
-    `RYDO: ${req.method} ${req.originalUrl}`
-  );
-
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[PERF HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} (${duration}ms)`
+    );
+  });
   next();
 });
 
@@ -109,10 +112,15 @@ if (!mongoUri) {
   );
 } else {
   mongoose
-    .connect(mongoUri)
+    .connect(mongoUri, {
+      maxPoolSize: 50,
+      minPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    })
     .then(() => {
       console.log(
-        'RYDO: MongoDB connected'
+        'RYDO: MongoDB connected (pool: min 10, max 50)'
       );
     })
     .catch((error) => {

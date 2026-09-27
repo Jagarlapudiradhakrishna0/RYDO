@@ -437,6 +437,16 @@ const rideSchema = new mongoose.Schema(
 );
 
 /* =====================================================
+   INDEXES FOR PRODUCTION PERFORMANCE
+===================================================== */
+
+rideSchema.index({ rideCode: 1 }, { unique: true });
+rideSchema.index({ 'riders.userId': 1 });
+rideSchema.index({ captainId: 1 });
+rideSchema.index({ captainUserId: 1 });
+rideSchema.index({ status: 1 });
+
+/* =====================================================
    MODEL
 ===================================================== */
 

@@ -35,12 +35,7 @@ import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
 
-import MapView, {
-  Marker,
-  Polyline,
-  Region,
-  UrlTile,
-} from 'react-native-maps';
+import RydoMap from '@/components/RydoMap';
 
 
 /* =====================================================
@@ -64,6 +59,13 @@ type LocationData = {
 type Coordinate = {
   latitude: number;
   longitude: number;
+};
+
+type Region = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
 };
 
 type Rider = {
@@ -96,6 +98,9 @@ type RouteData = {
   start: LocationData | null;
   destination: LocationData | null;
   stops: LocationData[];
+  coordinates?: Coordinate[];
+  distanceKm?: number;
+  durationMinutes?: number;
 };
 
 type Ride = {
@@ -251,7 +256,7 @@ export default function RiderDashboard() {
 
 
   const mapRef =
-    useRef<MapView | null>(null);
+    useRef<any>(null);
 
   const currentUser = getCurrentUser();
   const socketRef = useRef<Socket | null>(null);
@@ -560,12 +565,15 @@ export default function RiderDashboard() {
       });
     }
 
-    // 2. Throttled HTTP persistence (every 4s)
+    // 2. Throttled HTTP update (fallback only if Socket.IO is disconnected)
+    if (socketRef.current?.connected) {
+      return; // Socket.IO handles real-time broadcasting
+    }
+
     const now = Date.now();
-    if (now - lastLocationUploadRef.current > 4000) {
+    if (now - lastLocationUploadRef.current > 5000) {
       lastLocationUploadRef.current = now;
 
-      // Primary REST update endpoint (works on Render)
       if (riderDbIdRef.current) {
         fetch(
           `${API_URL}/api/rides/${encodeURIComponent(code)}/riders/${encodeURIComponent(riderDbIdRef.current)}/location`,
@@ -578,22 +586,21 @@ export default function RiderDashboard() {
             }),
           }
         ).catch(() => {});
+      } else {
+        fetch(
+          `${API_URL}/api/rides/${encodeURIComponent(code)}/rider-location`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              riderName: name,
+              userId: targetUserId,
+              latitude: lat,
+              longitude: lng,
+            }),
+          }
+        ).catch(() => {});
       }
-
-      // General fallback update endpoint
-      fetch(
-        `${API_URL}/api/rides/${encodeURIComponent(code)}/rider-location`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            riderName: name,
-            userId: targetUserId,
-            latitude: lat,
-            longitude: lng,
-          }),
-        }
-      ).catch(() => {});
     }
   };
 
@@ -827,8 +834,35 @@ export default function RiderDashboard() {
       });
     };
 
-    socket.on('ride:started', handleRideStarted);
-    socket.on('rideStarted', handleRideStarted);
+    const handleRouteUpdated = (data: any) => {
+      console.log('[RYDO ROUTE] Rider received route update event:', data);
+      const newRoute = data.route || data.ride?.route;
+      if (newRoute) {
+        setRide((prev) => (prev ? { ...prev, route: newRoute } : prev));
+        if (Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
+          setRoadRoute(newRoute.coordinates);
+          setRouteLoading(false);
+          setRouteError(false);
+        }
+      }
+      if (data.ride) {
+        setRide(data.ride);
+      }
+    };
+
+    socket.on('routeUpdated', handleRouteUpdated);
+    socket.on('route:updated', handleRouteUpdated);
+    socket.on('rideUpdated', (data: any) => {
+      console.log('[RYDO RIDE] Rider received rideUpdated event:', data);
+      if (data.ride) {
+        setRide(data.ride);
+        if (Array.isArray(data.ride.route?.coordinates) && data.ride.route.coordinates.length > 1) {
+          setRoadRoute(data.ride.route.coordinates);
+          setRouteLoading(false);
+          setRouteError(false);
+        }
+      }
+    });
 
     const handleSosEvent = (payload: any) => {
       console.log('[RYDO SOS] Received on rider dashboard:', payload);
@@ -880,6 +914,9 @@ export default function RiderDashboard() {
       socket.off('locationUpdated');
       socket.off('ride:started', handleRideStarted);
       socket.off('rideStarted', handleRideStarted);
+      socket.off('routeUpdated', handleRouteUpdated);
+      socket.off('route:updated', handleRouteUpdated);
+      socket.off('rideUpdated');
       socket.off('sosAlert', handleSosEvent);
       socket.off('sosTriggered', handleSosEvent);
       socket.off('sosResolved');
@@ -909,6 +946,15 @@ export default function RiderDashboard() {
 
       const fetchedRide = data.ride as Ride;
       setRide(fetchedRide);
+
+      if (
+        Array.isArray(fetchedRide.route?.coordinates) &&
+        fetchedRide.route.coordinates.length > 1
+      ) {
+        setRoadRoute(fetchedRide.route.coordinates);
+        setRouteLoading(false);
+        setRouteError(false);
+      }
 
       const myRiderObj = (fetchedRide.riders || []).find(
         (r: any) =>
@@ -1020,10 +1066,13 @@ export default function RiderDashboard() {
     fetchRide();
     fetchLiveLocations();
 
+    // Fallback polling: only runs if Socket.IO drops connection
     const interval = setInterval(() => {
-      fetchRide();
-      fetchLiveLocations();
-    }, 10000);
+      if (!socketRef.current?.connected) {
+        fetchRide();
+        fetchLiveLocations();
+      }
+    }, 15000);
 
     return () => {
       clearInterval(interval);
@@ -1036,29 +1085,13 @@ export default function RiderDashboard() {
   =================================================== */
 
   const routeWaypointsKey = useMemo(() => {
-    const pts: string[] = [];
-    if (
-      riderLocation &&
-      Number.isFinite(riderLocation.latitude) &&
-      Number.isFinite(riderLocation.longitude)
-    ) {
-      pts.push(
-        `${riderLocation.longitude.toFixed(5)},${riderLocation.latitude.toFixed(5)}`
-      );
-    } else if (
-      route.start &&
-      Number.isFinite(route.start.latitude) &&
-      Number.isFinite(route.start.longitude)
-    ) {
-      pts.push(
-        `${route.start.longitude.toFixed(5)},${route.start.latitude.toFixed(5)}`
-      );
+    if (!route.start || !route.destination) {
+      return '';
     }
 
+    const pts: string[] = [];
+
     if (
-      route.start &&
-      pts.length > 0 &&
-      riderLocation &&
       Number.isFinite(route.start.latitude) &&
       Number.isFinite(route.start.longitude)
     ) {
@@ -1080,7 +1113,6 @@ export default function RiderDashboard() {
     });
 
     if (
-      route.destination &&
       Number.isFinite(route.destination.latitude) &&
       Number.isFinite(route.destination.longitude)
     ) {
@@ -1089,10 +1121,8 @@ export default function RiderDashboard() {
       );
     }
 
-    return pts.join(';');
+    return pts.length >= 2 ? pts.join(';') : '';
   }, [
-    riderLocation?.latitude,
-    riderLocation?.longitude,
     route.start?.latitude,
     route.start?.longitude,
     JSON.stringify(
@@ -1114,9 +1144,18 @@ export default function RiderDashboard() {
   useEffect(() => {
     let cancelled = false;
 
+    // 1. If backend already sent full road route coordinates, use them directly
+    if (Array.isArray((ride?.route as any)?.coordinates) && (ride?.route as any).coordinates.length > 1) {
+      setRoadRoute((ride?.route as any).coordinates);
+      setRouteLoading(false);
+      setRouteError(false);
+      return;
+    }
+
     if (!routeWaypointsKey || routeWaypointsKey.split(';').length < 2) {
       setRoadRoute([]);
       lastCalculatedRouteKeyRef.current = '';
+      setRouteLoading(false);
       return;
     }
 
@@ -1163,8 +1202,18 @@ export default function RiderDashboard() {
       } catch (error) {
         console.log('RYDO ROUTING ERROR:', error);
         if (!cancelled) {
-          setRoadRoute([]);
-          setRouteError(true);
+          // If start and destination are known, generate a straight path fallback
+          if (route.start && route.destination) {
+            setRoadRoute([
+              { latitude: route.start.latitude, longitude: route.start.longitude },
+              ...(route.stops || []).map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
+              { latitude: route.destination.latitude, longitude: route.destination.longitude },
+            ]);
+            setRouteError(false);
+          } else {
+            setRoadRoute([]);
+            setRouteError(true);
+          }
         }
       } finally {
         if (!cancelled) {
@@ -1178,7 +1227,53 @@ export default function RiderDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [routeWaypointsKey]);
+  }, [routeWaypointsKey, (ride?.route as any)?.coordinates]);
+
+  /* ===================================================
+     EMERGENCY SOS ROUTE TO INCIDENT LOCATION
+  =================================================== */
+
+  useEffect(() => {
+    if (!activeSosEvent || !riderLocation) {
+      setEmergencyRoute([]);
+      return;
+    }
+
+    const sosLat = Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude);
+    const sosLng = Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude);
+    if (!Number.isFinite(sosLat) || !Number.isFinite(sosLng)) return;
+
+    const url = `${OSRM_URL}/${riderLocation.longitude.toFixed(5)},${riderLocation.latitude.toFixed(5)};${sosLng.toFixed(5)},${sosLat.toFixed(5)}?overview=full&geometries=geojson`;
+
+    fetch(url)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const coords: Coordinate[] = data.routes[0].geometry.coordinates.map((c: number[]) => ({
+            latitude: c[1],
+            longitude: c[0],
+          }));
+          setEmergencyRoute(coords);
+        } else {
+          setEmergencyRoute([
+            { latitude: riderLocation.latitude, longitude: riderLocation.longitude },
+            { latitude: sosLat, longitude: sosLng },
+          ]);
+        }
+      })
+      .catch(() => {
+        setEmergencyRoute([
+          { latitude: riderLocation.latitude, longitude: riderLocation.longitude },
+          { latitude: sosLat, longitude: sosLng },
+        ]);
+      });
+  }, [
+    activeSosEvent?.eventId,
+    activeSosEvent?.location?.latitude,
+    activeSosEvent?.location?.longitude,
+    riderLocation?.latitude,
+    riderLocation?.longitude,
+  ]);
 
 
   /* ===================================================
@@ -1483,142 +1578,7 @@ export default function RiderDashboard() {
     };
 
 
-  /* ===================================================
-     ROUTE MARKERS
-  =================================================== */
 
-  const renderRouteMarkers =
-    () => {
-
-      return (
-        <>
-
-          {/* START */}
-
-          {route.start && (
-
-            <Marker
-              coordinate={{
-                latitude:
-                  route.start.latitude,
-
-                longitude:
-                  route.start.longitude,
-              }}
-
-              title="START"
-
-              description={
-                route.start.name
-              }
-
-              zIndex={15}
-            >
-
-              <View
-                style={
-                  styles.liveStartMarker
-                }
-              >
-
-                <Text
-                  style={
-                    styles.liveStartText
-                  }
-                >
-                  S
-                </Text>
-
-              </View>
-
-            </Marker>
-          )}
-
-
-          {/* STOPS */}
-
-          {route.stops.map(
-            (stop, index) => (
-
-              <Marker
-                key={
-                  `stop-${index}`
-                }
-
-                coordinate={{
-                  latitude:
-                    stop.latitude,
-
-                  longitude:
-                    stop.longitude,
-                }}
-
-                title={
-                  `STOP ${index + 1}`
-                }
-
-                description={
-                  stop.name
-                }
-
-                zIndex={15}
-              >
-
-                <View
-                  style={
-                    styles.liveStopMarker
-                  }
-                >
-
-                  <Text
-                    style={
-                      styles.liveStopText
-                    }
-                  >
-                    {index + 1}
-                  </Text>
-
-                </View>
-
-              </Marker>
-            )
-          )}
-
-
-          {/* DESTINATION */}
-
-          {route.destination && (
-
-            <Marker
-              coordinate={{
-                latitude:
-                  route.destination.latitude,
-
-                longitude:
-                  route.destination.longitude,
-              }}
-
-              title="DESTINATION"
-
-              description={
-                route.destination.name
-              }
-
-              zIndex={15}
-            >
-
-              <View
-                style={
-                  styles.liveDestinationMarker
-                }
-              />
-
-            </Marker>
-          )}
-
-        </>
-      );
-    };
 
 
   /* ===================================================
@@ -1862,189 +1822,53 @@ export default function RiderDashboard() {
             }
           >
 
-            <MapView
+            <RydoMap
               ref={mapRef}
-
               style={styles.map}
-
-              initialRegion={
-                mapInitialRegion
+              initialRegion={mapInitialRegion}
+              roadRoute={roadRoute}
+              emergencyRoute={emergencyRoute}
+              captainLocation={
+                captainLocation
+                  ? {
+                      latitude: captainLocation.latitude,
+                      longitude: captainLocation.longitude,
+                      name: displayCaptain,
+                    }
+                  : null
               }
-
-              showsUserLocation={false}
-
-              showsMyLocationButton={false}
-
-              showsCompass={true}
-
-              showsScale={true}
-
-              loadingEnabled={false}
-
-              toolbarEnabled={false}
-
-              mapType="none"
-            >
-              <UrlTile
-                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                maximumZ={19}
-                flipY={false}
-                zIndex={-1}
-              />
-
-              {roadRoute.length > 1 && (
-
-                <Polyline
-                  coordinates={
-                    roadRoute
-                  }
-
-                  strokeColor="#147BFF"
-
-                  strokeWidth={6}
-
-                  lineCap="round"
-
-                  lineJoin="round"
-
-                  zIndex={10}
-                />
-              )}
-
-              {/* Emergency SOS Route (Red) */}
-              {emergencyRoute.length > 1 && (
-                <Polyline
-                  coordinates={emergencyRoute}
-                  strokeColor="#EF4444"
-                  strokeWidth={6}
-                  lineCap="round"
-                  lineJoin="round"
-                  zIndex={40}
-                />
-              )}
-
-
-              {/* YOU */}
-
-              {riderLocation && (
-
-                <Marker
-                  coordinate={
-                    riderLocation
-                  }
-
-                  title="You"
-
-                  description="Your live GPS location"
-
-                  zIndex={30}
-                >
-
-                  <View
-                    style={
-                      styles.riderMarker
+              riderLocation={
+                riderLocation
+                  ? {
+                      latitude: riderLocation.latitude,
+                      longitude: riderLocation.longitude,
+                      name: 'You',
                     }
-                  >
-
-                    <View
-                      style={
-                        styles.riderMarkerInner
-                      }
-                    />
-
-                  </View>
-
-                </Marker>
-              )}
-
-
-              {/* CAPTAIN */}
-
-              {captainLocation && (
-
-                <Marker
-                  coordinate={
-                    captainLocation
-                  }
-
-                  title="Captain"
-
-                  description={
-                    displayCaptain
-                  }
-
-                  zIndex={35}
-                >
-
-                  <View
-                    style={
-                      styles.captainMarker
+                  : null
+              }
+              liveRiders={liveRiders.map((r) => ({
+                id: r._id,
+                _id: r._id,
+                name: r.name,
+                latitude: Number(r.location?.latitude ?? r.latitude),
+                longitude: Number(r.location?.longitude ?? r.longitude),
+                isLive: true,
+              }))}
+              startLocation={route.start ? { latitude: route.start.latitude, longitude: route.start.longitude, name: route.start.name } : null}
+              stops={route.stops?.map((s) => ({ latitude: s.latitude, longitude: s.longitude, name: s.name })) || []}
+              destinationLocation={route.destination ? { latitude: route.destination.latitude, longitude: route.destination.longitude, name: route.destination.name } : null}
+              activeSosEvent={
+                activeSosEvent
+                  ? {
+                      latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
+                      longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
+                      name: activeSosEvent.name || activeSosEvent.riderName,
+                      role: activeSosEvent.role,
                     }
-                  >
-
-                    <Text
-                      style={
-                        styles.captainMarkerText
-                      }
-                    >
-                      C
-                    </Text>
-
-                  </View>
-
-                </Marker>
-              )}
-
-              {/* OTHER LIVE RIDERS */}
-              {liveRiders.map((r, idx) => {
-                const rLat = r.location?.latitude ?? r.latitude;
-                const rLng = r.location?.longitude ?? r.longitude;
-                if (!rLat || !rLng) return null;
-
-                return (
-                  <Marker
-                    key={`live-rider-${r._id || r.name || idx}`}
-                    coordinate={{ latitude: rLat, longitude: rLng }}
-                    title={r.name || 'Rider'}
-                    description="RYDO Rider"
-                    zIndex={25}
-                  >
-                    <View style={styles.riderMarker}>
-                      <View style={styles.riderMarkerInner} />
-                    </View>
-                  </Marker>
-                );
-              })}
-
-              {/* ACTIVE SOS EMERGENCY MARKER */}
-              {activeSosEvent && (
-                <Marker
-                  key={`sos-marker-${activeSosEvent.eventId || activeSosEvent.userId || 'emergency'}`}
-                  coordinate={{
-                    latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
-                    longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
-                  }}
-                  title={`🚨 SOS: ${activeSosEvent.name || activeSosEvent.riderName}`}
-                  description="EMERGENCY LOCATION • TAP FOR DETAILS"
-                  onPress={() => setSosOverlayVisible(true)}
-                  zIndex={100}
-                >
-                  <View style={styles.sosMarkerWrapper}>
-                    <View style={styles.sosMarkerOuter}>
-                      <Text style={styles.sosMarkerIcon}>🚨</Text>
-                    </View>
-                    <View style={styles.sosMarkerBadge}>
-                      <Text style={styles.sosMarkerBadgeText} numberOfLines={1}>
-                        SOS • {activeSosEvent.name || activeSosEvent.riderName} ({activeSosEvent.role?.toUpperCase()})
-                      </Text>
-                    </View>
-                  </View>
-                </Marker>
-              )}
-
-              {renderRouteMarkers()}
-
-            </MapView>
+                  : null
+              }
+              onSosPress={() => setSosOverlayVisible(true)}
+            />
 
 
 
@@ -2489,206 +2313,58 @@ export default function RiderDashboard() {
               MAP
           ================================================= */}
 
-          <MapView
+          <RydoMap
             ref={mapRef}
-
-            style={
-              styles.fullMap
+            style={styles.fullMap}
+            initialRegion={mapInitialRegion}
+            roadRoute={roadRoute}
+            emergencyRoute={emergencyRoute}
+            captainLocation={
+              captainLocation
+                ? {
+                    latitude: captainLocation.latitude,
+                    longitude: captainLocation.longitude,
+                    name: displayCaptain,
+                  }
+                : null
             }
-
-            loadingEnabled={false}
-
-            toolbarEnabled={false}
-
-            mapType="none"
-          >
-            <UrlTile
-              urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-              maximumZ={19}
-              flipY={false}
-              zIndex={-1}
-            />
-
-            {/* BLUE ROAD ROUTE */}
-
-            {roadRoute.length > 1 && (
-
-              <Polyline
-                coordinates={
-                  roadRoute
-                }
-
-                strokeColor="#147BFF"
-
-                strokeWidth={7}
-
-                lineCap="round"
-
-                lineJoin="round"
-
-                geodesic={false}
-
-                zIndex={10}
-              />
-            )}
-
-
-            {/* =================================================
-                RIDER / YOU
-            ================================================= */}
-
-            {riderLocation && (
-
-              <Marker
-                coordinate={
-                  riderLocation
-                }
-
-                title="You"
-
-                description={
-                  'Your live GPS location'
-                }
-
-                anchor={{
-                  x: 0.5,
-                  y: 0.5,
-                }}
-
-                zIndex={40}
-              >
-
-                <View
-                  style={
-                    styles.liveRiderMarker
+            riderLocation={
+              riderLocation
+                ? {
+                    latitude: riderLocation.latitude,
+                    longitude: riderLocation.longitude,
+                    name: 'You',
                   }
-                >
-
-                  <View
-                    style={
-                      styles.liveRiderInner
-                    }
-                  />
-
-                </View>
-
-              </Marker>
-            )}
-
-
-            {/* =================================================
-                CAPTAIN
-            ================================================= */}
-
-            {captainLocation && (
-
-              <Marker
-                coordinate={
-                  captainLocation
-                }
-
-                title="Captain"
-
-                description={
-                  displayCaptain
-                }
-
-                anchor={{
-                  x: 0.5,
-                  y: 0.5,
-                }}
-
-                zIndex={50}
-              >
-
-                <View
-                  style={
-                    styles.liveCaptainMarker
+                : null
+            }
+            liveRiders={riders
+              .map((r, idx) => {
+                const memLoc = getMemberLocation(r);
+                return {
+                  id: r._id || r.name || String(idx),
+                  _id: r._id,
+                  name: r.name,
+                  latitude: memLoc?.latitude || 0,
+                  longitude: memLoc?.longitude || 0,
+                  isLive: true,
+                };
+              })
+              .filter((r) => r.name !== displayName && r.latitude !== 0)}
+            startLocation={route.start ? { latitude: route.start.latitude, longitude: route.start.longitude, name: route.start.name } : null}
+            stops={route.stops?.map((s) => ({ latitude: s.latitude, longitude: s.longitude, name: s.name })) || []}
+            destinationLocation={route.destination ? { latitude: route.destination.latitude, longitude: route.destination.longitude, name: route.destination.name } : null}
+            activeSosEvent={
+              activeSosEvent
+                ? {
+                    latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
+                    longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
+                    name: activeSosEvent.name || activeSosEvent.riderName,
+                    role: activeSosEvent.role,
                   }
-                >
-
-                  <Text
-                    style={
-                      styles.liveCaptainText
-                    }
-                  >
-                    C
-                  </Text>
-
-                </View>
-
-              </Marker>
-            )}
-
-
-            {/* =================================================
-                OTHER RIDERS
-            ================================================= */}
-
-            {riders.map(
-              (rider, index) => {
-
-                const memberLocation =
-                  getMemberLocation(
-                    rider
-                  );
-
-
-                if (
-                  !memberLocation ||
-                  rider.name ===
-                    displayName
-                ) {
-
-                  return null;
-                }
-
-
-                return (
-
-                  <Marker
-                    key={
-                      `crew-${rider._id || rider.name}-${index}`
-                    }
-
-                    coordinate={
-                      memberLocation
-                    }
-
-                    title={
-                      rider.name
-                    }
-
-                    description={
-                      'RYDO Crew Rider'
-                    }
-
-                    zIndex={30}
-                  >
-
-                    <View
-                      style={
-                        styles.crewMapMarker
-                      }
-                    >
-
-                      <View
-                        style={
-                          styles.crewMapMarkerInner
-                        }
-                      />
-
-                    </View>
-
-                  </Marker>
-                );
-              }
-            )}
-
-
-            {renderRouteMarkers()}
-
-          </MapView>
+                : null
+            }
+            onSosPress={() => setSosOverlayVisible(true)}
+          />
 
 
           {/* DARK OVERLAY */}
@@ -4017,11 +3693,19 @@ const styles =
     },
 
     fullMap: {
-      ...StyleSheet.absoluteFillObject,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
     },
 
     mapDarkOverlay: {
-      ...StyleSheet.absoluteFillObject,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
       backgroundColor:
         'rgba(0,0,0,0.08)',
     },

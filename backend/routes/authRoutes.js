@@ -305,6 +305,7 @@ router.post('/register', async (req, res) => {
 ===================================================== */
 
 router.post('/login', async (req, res) => {
+  const tStart = Date.now();
   try {
     const { email, password } = req.body;
 
@@ -317,34 +318,43 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: normalizedEmail });
+    const tDbStart = Date.now();
+    const user = await User.findOne({ email: normalizedEmail }).lean();
+    const tDbTime = Date.now() - tDbStart;
 
     if (!user) {
+      console.log(`[PERF LOGIN] DB: ${tDbTime}ms | User not found | Total: ${Date.now() - tStart}ms`);
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password.',
       });
     }
 
+    const tHashStart = Date.now();
     const isMatch = verifyPassword(
       password,
       user.passwordSalt,
       user.passwordHash
     );
+    const tHashTime = Date.now() - tHashStart;
 
     if (!isMatch) {
+      console.log(`[PERF LOGIN] DB: ${tDbTime}ms | Hash: ${tHashTime}ms | Password mismatch | Total: ${Date.now() - tStart}ms`);
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password.',
       });
     }
 
-    console.log('RYDO: User logged in:', user.email);
+    delete user.passwordHash;
+    delete user.passwordSalt;
+
+    console.log(`[PERF LOGIN] DB: ${tDbTime}ms | Hash: ${tHashTime}ms | Total: ${Date.now() - tStart}ms | User: ${user.email}`);
 
     return res.json({
       success: true,
       message: 'Login successful!',
-      user: user.toSafeObject(),
+      user,
     });
   } catch (error) {
     console.error('RYDO: Login error:', error);

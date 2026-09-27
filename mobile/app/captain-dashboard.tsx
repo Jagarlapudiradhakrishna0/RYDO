@@ -2,6 +2,7 @@ import React, {
   useEffect,
   useRef,
   useState,
+  useMemo,
 } from 'react';
 
 import {
@@ -24,14 +25,8 @@ import {
   useLocalSearchParams,
 } from 'expo-router';
 
-import MapView, {
-  Marker,
-  Polyline,
-  LatLng,
-  UrlTile,
-} from 'react-native-maps';
-
 import * as Location from 'expo-location';
+import RydoMap from '@/components/RydoMap';
 
 import { Socket } from 'socket.io-client';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
@@ -41,8 +36,8 @@ import { socketService } from '@/services/socketService';
 import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
-
 import { API_URL } from '@/constants/network';
+import { DARK_MAP_STYLE } from '@/constants/mapStyle';
 
 /* =====================================================
    OSRM
@@ -58,6 +53,15 @@ const OSRM_URL =
 type Coordinate = {
   latitude: number;
   longitude: number;
+};
+
+type LatLng = Coordinate;
+
+type Region = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
 };
 
 type RiderLocation = {
@@ -226,7 +230,40 @@ export default function CaptainDashboard() {
     useState(false);
 
   const mapRef =
-    useRef<MapView | null>(null);
+    useRef<any>(null);
+
+  const mapInitialRegion: Region = useMemo(() => {
+    if (captainLocation) {
+      return {
+        latitude: captainLocation.latitude,
+        longitude: captainLocation.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+    }
+    if (location) {
+      return {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+    }
+    if (routeData.start) {
+      return {
+        latitude: routeData.start.latitude,
+        longitude: routeData.start.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+    }
+    return {
+      latitude: 17.9689,
+      longitude: 79.5941,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    };
+  }, [captainLocation, location, routeData.start]);
 
   /* ===================================================
      SOCKET
@@ -610,7 +647,11 @@ export default function CaptainDashboard() {
         `RYDO LOCATION: User: ${name} | Role: captain | Ride: ${code} | Latitude: ${lat.toFixed(5)} | Longitude: ${lng.toFixed(5)}`
       );
 
-      // 2. Throttled HTTP update (every 5s)
+      // 2. Throttled HTTP update (fallback only if Socket.IO is disconnected)
+      if (socketRef.current?.connected) {
+        return; // Socket.IO handles real-time broadcasting
+      }
+
       const now =
         Date.now();
 
@@ -1111,6 +1152,15 @@ export default function CaptainDashboard() {
           destination,
           stops,
         });
+
+        if (
+          Array.isArray(backendRoute.coordinates) &&
+          backendRoute.coordinates.length > 1
+        ) {
+          setRoadRoute(backendRoute.coordinates);
+          if (backendRoute.distanceMeters) setRouteDistance(backendRoute.distanceMeters);
+          if (backendRoute.durationSeconds) setRouteDuration(backendRoute.durationSeconds);
+        }
       } catch (error) {
         console.log(
           'RYDO: Backend connection error:',
@@ -1145,22 +1195,17 @@ export default function CaptainDashboard() {
     fetchRide();
     fetchRiderLocations();
 
-    // fetchRide: slow poll for ride membership/route changes (every 30s)
-    // fetchRiderLocations: fast poll for live GPS (every 5s)
-    // These are deliberately SEPARATE so fetchRide never races with
-    // and overwrites freshly-fetched GPS coordinates from fetchRiderLocations.
-    const rideInterval = setInterval(() => {
-      fetchRide();
-    }, 30000);
-
-    const locationInterval = setInterval(() => {
-      fetchRiderLocations();
-    }, 5000);
+    // Fallback polling: Only poll via HTTP if Socket.IO connection drops
+    const fallbackInterval = setInterval(() => {
+      if (!socketRef.current?.connected) {
+        fetchRide();
+        fetchRiderLocations();
+      }
+    }, 15000);
 
     return () => {
       mountedRef.current = false;
-      clearInterval(rideInterval);
-      clearInterval(locationInterval);
+      clearInterval(fallbackInterval);
     };
   }, [rideCode]);
 
@@ -1487,6 +1532,31 @@ export default function CaptainDashboard() {
       setSosOverlayVisible(true);
     };
 
+    const handleRouteUpdated = (data: any) => {
+      console.log('[RYDO ROUTE] Captain received route update event:', data);
+      const newRoute = data.route || data.ride?.route;
+      if (newRoute) {
+        setRouteData({
+          start: newRoute.start ? { name: newRoute.start.name || 'Start', latitude: newRoute.start.latitude, longitude: newRoute.start.longitude } : null,
+          destination: newRoute.destination ? { name: newRoute.destination.name || 'Destination', latitude: newRoute.destination.latitude, longitude: newRoute.destination.longitude } : null,
+          stops: Array.isArray(newRoute.stops) ? newRoute.stops.map((s: any) => ({ name: s.name || 'Stop', latitude: s.latitude, longitude: s.longitude })) : [],
+        });
+        if (Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
+          setRoadRoute(newRoute.coordinates);
+          if (newRoute.distanceMeters) setRouteDistance(newRoute.distanceMeters);
+          if (newRoute.durationSeconds) setRouteDuration(newRoute.durationSeconds);
+        }
+      }
+    };
+
+    socket.on('routeUpdated', handleRouteUpdated);
+    socket.on('route:updated', handleRouteUpdated);
+    socket.on('rideUpdated', (data: any) => {
+      if (data.ride?.route) {
+        handleRouteUpdated(data.ride);
+      }
+    });
+
     socket.on('sosAlert', handleSosEvent);
     socket.on('sosTriggered', handleSosEvent);
     socket.on('sosResolved', (data: any) => {
@@ -1519,11 +1589,63 @@ export default function CaptainDashboard() {
       socket.off('locationsSnapshot');
       socket.off('locationUpdated');
       socket.off('userLeft');
+      socket.off('routeUpdated', handleRouteUpdated);
+      socket.off('route:updated', handleRouteUpdated);
+      socket.off('rideUpdated');
       socket.off('sosAlert', handleSosEvent);
       socket.off('sosTriggered', handleSosEvent);
       socket.off('sosResolved');
     };
   }, [rideCode, displayCaptain]);
+
+  /* ===================================================
+     EMERGENCY SOS ROUTE (CAPTAIN TO SOS VICTIM)
+  =================================================== */
+
+  useEffect(() => {
+    const myPos = location || captainLocation;
+    if (!activeSosEvent || !myPos) {
+      setEmergencyRoute([]);
+      return;
+    }
+
+    const sosLat = Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude);
+    const sosLng = Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude);
+    if (!Number.isFinite(sosLat) || !Number.isFinite(sosLng)) return;
+
+    const url = `${OSRM_URL}/${myPos.longitude.toFixed(5)},${myPos.latitude.toFixed(5)};${sosLng.toFixed(5)},${sosLat.toFixed(5)}?overview=full&geometries=geojson`;
+
+    fetch(url)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const coords: Coordinate[] = data.routes[0].geometry.coordinates.map((c: number[]) => ({
+            latitude: c[1],
+            longitude: c[0],
+          }));
+          setEmergencyRoute(coords);
+        } else {
+          setEmergencyRoute([
+            { latitude: myPos.latitude, longitude: myPos.longitude },
+            { latitude: sosLat, longitude: sosLng },
+          ]);
+        }
+      })
+      .catch(() => {
+        setEmergencyRoute([
+          { latitude: myPos.latitude, longitude: myPos.longitude },
+          { latitude: sosLat, longitude: sosLng },
+        ]);
+      });
+  }, [
+    activeSosEvent?.eventId,
+    activeSosEvent?.location?.latitude,
+    activeSosEvent?.location?.longitude,
+    location?.latitude,
+    location?.longitude,
+    captainLocation?.latitude,
+    captainLocation?.longitude,
+  ]);
 
   /* ===================================================
      LOCATION TRACKING
@@ -2930,393 +3052,50 @@ export default function CaptainDashboard() {
               styles.mapContainer
             }
           >
-            {(location || captainLocation) ? (
-              <MapView
-                ref={mapRef}
-
-                style={
-                  styles.realMap
-                }
-
-                showsUserLocation={
-                  false
-                }
-
-                showsMyLocationButton={
-                  false
-                }
-
-                showsCompass={
-                  true
-                }
-
-                showsScale={
-                  true
-                }
-
-                scrollEnabled={
-                  true
-                }
-
-                zoomEnabled={
-                  true
-                }
-
-                zoomTapEnabled={
-                  true
-                }
-
-                zoomControlEnabled={
-                  true
-                }
-
-                rotateEnabled={
-                  true
-                }
-
-                pitchEnabled={
-                  true
-                }
-
-                toolbarEnabled={
-                  false
-                }
-
-                mapType="none"
-
-                onMapReady={() =>
-                  setMapReady(
-                    true
-                  )
-                }
-
-                initialRegion={{
-                  latitude:
-                    (location || captainLocation)!.latitude,
-
-                  longitude:
-                    (location || captainLocation)!.longitude,
-
-                  latitudeDelta:
-                    0.05,
-
-                  longitudeDelta:
-                    0.05,
-                }}
-              >
-                <UrlTile
-                  urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                  maximumZ={19}
-                  flipY={false}
-                  zIndex={-1}
-                />
-                {/* =========================================
-                    ROAD ROUTE
-                ========================================= */}
-
-                {roadRoute.length >
-                  1 && (
-                  <Polyline
-                    coordinates={
-                      roadRoute
+            <RydoMap
+              ref={mapRef}
+              style={styles.realMap}
+              initialRegion={mapInitialRegion}
+              roadRoute={roadRoute}
+              emergencyRoute={emergencyRoute}
+              captainLocation={
+                (location || captainLocation)
+                  ? {
+                      latitude: (location || captainLocation)!.latitude,
+                      longitude: (location || captainLocation)!.longitude,
+                      name: displayCaptain,
+                      heading,
                     }
-
-                    strokeWidth={
-                      6
-                    }
-
-                    strokeColor={
-                      '#1677FF'
-                    }
-
-                    lineCap="round"
-
-                    lineJoin="round"
-                  />
-                )}
-
-                {/* =========================================
-                    EMERGENCY SOS ROUTE (RED)
-                ========================================= */}
-
-                {emergencyRoute.length > 1 && (
-                  <Polyline
-                    coordinates={emergencyRoute}
-                    strokeColor="#EF4444"
-                    strokeWidth={6}
-                    lineCap="round"
-                    lineJoin="round"
-                    zIndex={40}
-                  />
-                )}
-
-                {/* =========================================
-                    CAPTAIN MARKER
-                ========================================= */}
-
-                <Marker
-                  identifier="captain-marker"
-
-                  coordinate={{
-                    latitude:
-                      (location || captainLocation)!.latitude,
-
-                    longitude:
-                      (location || captainLocation)!.longitude,
-                  }}
-
-                  rotation={
-                    heading || 0
-                  }
-
-                  flat={
-                    true
-                  }
-
-                  anchor={{
-                    x: 0.5,
-                    y: 0.5,
-                  }}
-
-                  tracksViewChanges={
-                    true
-                  }
-
-                  title={
-                    `${displayCaptain} • Captain`
-                  }
-                >
-                  <View
-                    style={
-                      styles.captainMarker
-                    }
-                  >
-                    <View
-                      style={
-                        styles.captainMarkerArrow
-                      }
-                    />
-                  </View>
-                </Marker>
-
-                {/* =========================================
-                    RIDER MARKERS
-                ========================================= */}
-
-                {(() => {
-                  const ridersWithValidLoc = riders.filter(
-                    (r) => r.location && Number.isFinite(Number(r.location.latitude)) && Number.isFinite(Number(r.location.longitude))
-                  );
-                  console.log(
-                    '[CAPTAIN MAP] rendering rider markers:',
-                    riders.map((r) => ({
-                      userId: r._id,
-                      name: r.name,
-                      latitude: r.location?.latitude,
-                      longitude: r.location?.longitude,
-                    }))
-                  );
-                  console.log(
-                    '[CAPTAIN MAP] total rider locations:',
-                    ridersWithValidLoc.length
-                  );
-                  return null;
-                })()}
-
-                {riders.map(
-                  (
-                    rider,
-                    index
-                  ) => {
-                    if (
-                      !rider.location ||
-                      !Number.isFinite(Number(rider.location.latitude)) ||
-                      !Number.isFinite(Number(rider.location.longitude))
-                    ) {
-                      return null;
-                    }
-
-                    const isLive = isRiderLive(rider);
-                    const initial = String(rider.name || 'R')
-                      .charAt(0)
-                      .toUpperCase();
-                    const isSelected =
-                      selectedRider &&
-                      ((selectedRider._id && selectedRider._id === rider._id) ||
-                        selectedRider.name === rider.name);
-
-                    return (
-                      <Marker
-                        key={`rider-${rider._id || rider.name || index}`}
-
-                        identifier={`rider-${rider._id || rider.name || index}`}
-
-                        coordinate={{
-                          latitude: Number(rider.location.latitude),
-                          longitude: Number(rider.location.longitude),
-                        }}
-
-                        title={rider.name}
-
-                        description={`RYDO RIDER • ${getRiderStatusLabel(rider)}`}
-
-                        onPress={() => setSelectedRider(rider)}
-
-                        tracksViewChanges={true}
-
-                        zIndex={isSelected ? 50 : 25}
-                      >
-                        <View
-                          style={
-                            styles.riderMarkerWrapper
-                          }
-                        >
-                          <View
-                            style={[
-                              styles.riderMarker,
-                              isLive
-                                ? styles.riderMarkerLive
-                                : styles.riderMarkerOffline,
-                              isSelected &&
-                                styles.riderMarkerSelected,
-                            ]}
-                          >
-                            <Text
-                              style={
-                                styles.riderMarkerText
-                              }
-                            >
-                              {initial}
-                            </Text>
-                          </View>
-
-                          <View
-                            style={
-                              styles.riderMarkerBadge
-                            }
-                          >
-                            <View
-                              style={[
-                                styles.riderMarkerDot,
-                                isLive
-                                  ? styles.riderMarkerDotLive
-                                  : styles.riderMarkerDotOffline,
-                              ]}
-                            />
-                            <Text
-                              style={
-                                styles.riderMarkerName
-                              }
-                              numberOfLines={1}
-                            >
-                              {rider.name}
-                            </Text>
-                          </View>
-                        </View>
-                      </Marker>
-                    );
-                  }
-                )}
-
-                {/* =========================================
-                    ACTIVE SOS EMERGENCY MARKER
-                ========================================= */}
-
-                {activeSosEvent && (
-                  <Marker
-                    key={`sos-marker-${activeSosEvent.eventId || activeSosEvent.userId || 'emergency'}`}
-                    coordinate={{
+                  : null
+              }
+              liveRiders={riders.map((r) => ({
+                id: r._id,
+                _id: r._id,
+                name: r.name,
+                latitude: Number(r.location?.latitude || 0),
+                longitude: Number(r.location?.longitude || 0),
+                isLive: isRiderLive(r),
+              }))}
+              startLocation={routeData.start ? { latitude: routeData.start.latitude, longitude: routeData.start.longitude, name: routeData.start.name } : null}
+              stops={routeData.stops?.map((s) => ({ latitude: s.latitude, longitude: s.longitude, name: s.name })) || []}
+              destinationLocation={routeData.destination ? { latitude: routeData.destination.latitude, longitude: routeData.destination.longitude, name: routeData.destination.name } : null}
+              activeSosEvent={
+                activeSosEvent
+                  ? {
                       latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
                       longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
-                    }}
-                    title={`🚨 SOS: ${activeSosEvent.name || activeSosEvent.riderName}`}
-                    description="EMERGENCY LOCATION • TAP FOR DETAILS"
-                    onPress={() => setSosOverlayVisible(true)}
-                    tracksViewChanges={true}
-                    zIndex={100}
-                  >
-                    <View style={styles.sosMarkerWrapper}>
-                      <View style={styles.sosMarkerOuter}>
-                        <Text style={styles.sosMarkerIcon}>🚨</Text>
-                      </View>
-                      <View style={styles.sosMarkerBadge}>
-                        <Text style={styles.sosMarkerBadgeText} numberOfLines={1}>
-                          SOS • {activeSosEvent.name || activeSosEvent.riderName} ({activeSosEvent.role?.toUpperCase()})
-                        </Text>
-                      </View>
-                    </View>
-                  </Marker>
-                )}
-
-                {/* =========================================
-                    DESTINATION
-                ========================================= */}
-
-                {routeData.destination && (
-                  <Marker
-                    identifier="destination-marker"
-
-                    coordinate={{
-                      latitude:
-                        routeData
-                          .destination
-                          .latitude,
-
-                      longitude:
-                        routeData
-                          .destination
-                          .longitude,
-                    }}
-
-                    title={
-                      routeData
-                        .destination
-                        .name
+                      name: activeSosEvent.name || activeSosEvent.riderName,
+                      role: activeSosEvent.role,
                     }
-                  >
-                    <View
-                      style={
-                        styles.destinationMarker
-                      }
-                    >
-                      <View
-                        style={
-                          styles.destinationMarkerInner
-                        }
-                      />
-                    </View>
-                  </Marker>
-                )}
-              </MapView>
-            ) : (
-              <View
-                style={
-                  styles.locationLoading
-                }
-              >
-                <Text
-                  style={
-                    styles.locationLoadingTitle
-                  }
-                >
-                  {locationLoading
-                    ? 'LOCATING...'
-                    : 'LOCATION REQUIRED'}
-                </Text>
-
-                <Text
-                  style={
-                    styles.locationLoadingText
-                  }
-                >
-                  {locationLoading
-                    ? 'Getting your current position'
-                    : locationPermission
-                    ? 'Unable to get your location'
-                    : 'Allow RYDO to access your location'}
-                </Text>
-              </View>
-            )}
+                  : null
+              }
+              onSosPress={() => setSosOverlayVisible(true)}
+              onRiderPress={(rider) => {
+                const fullRider = riders.find((r) => (r._id && r._id === rider.id) || r.name === rider.name);
+                if (fullRider) setSelectedRider(fullRider);
+              }}
+              onMapReady={() => setMapReady(true)}
+            />
 
             {/* =========================================
                 MAP HEADER

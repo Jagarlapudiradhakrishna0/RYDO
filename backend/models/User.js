@@ -144,7 +144,15 @@ userSchema.methods.toSafeObject = function (options = {}) {
 };
 
 /* =====================================================
+   INDEXES FOR PRODUCTION PERFORMANCE
+===================================================== */
+
+userSchema.index({ email: 1 }, { unique: true });
+userSchema.index({ name: 1 });
+
+/* =====================================================
    EXPORT
 ===================================================== */
 
 module.exports = mongoose.model('User', userSchema);
+

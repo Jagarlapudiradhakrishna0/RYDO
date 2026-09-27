@@ -15,10 +15,13 @@ const Ride = require('../models/Ride');
 const RideMessage = require('../models/RideMessage');
 
 /* =====================================================
-   IN-MEMORY ACTIVE RIDE STORE
+   IN-MEMORY ACTIVE RIDE STORE & THROTTLED PERSISTENCE
 ===================================================== */
 
 const rideRooms = new Map();
+const lastLocationPersistMap = new Map();
+const LOCATION_PERSIST_INTERVAL_MS = 10000;
+
 
 /* =====================================================
    IN-MEMORY VOICE ROOM STORE
@@ -120,7 +123,9 @@ function initializeRideSocket(io) {
         // POPULATE / MERGE FROM MONGODB
         const roomState = getOrCreateRoom(rideCode);
         try {
-          const dbRide = await Ride.findOne({ rideCode });
+          const dbRide = await Ride.findOne({ rideCode })
+            .select('captainLocation captainName riders')
+            .lean();
           if (dbRide) {
             if (
               !roomState.captainLocation &&
@@ -292,67 +297,70 @@ function initializeRideSocket(io) {
           longitude,
         });
 
-        // Broadcast to EVERYONE in this ride room in real time
+        // Broadcast to EVERYONE in this ride room in real time (zero database delay)
         io.to(rideCode).emit('locationUpdated', locationData);
 
-        // PERSIST TO MONGODB SO LOCATIONS SURVIVE RESTARTS
-        const updateDate = new Date(updatedAt);
-        const rideDoc = await Ride.findOne({ rideCode });
+        // THROTTLED NON-BLOCKING ATOMIC PERSISTENCE (At most once every 10s per user)
+        const persistKey = `${rideCode}:${userId}`;
+        const now = Date.now();
+        const lastPersist = lastLocationPersistMap.get(persistKey) || 0;
 
-        if (rideDoc) {
+        if (now - lastPersist >= LOCATION_PERSIST_INTERVAL_MS) {
+          lastLocationPersistMap.set(persistKey, now);
+          const updateDate = new Date(updatedAt);
+
           if (validRole === 'captain') {
-            rideDoc.captainLocation = {
-              latitude,
-              longitude,
-              updatedAt: updateDate,
-            };
-            rideDoc.captainId = userId;
-            rideDoc.captainUserId = userId;
-            await rideDoc.save();
-
-            console.log('RYDO LOCATION SAVED:', {
-              userId,
-              role: 'captain',
-              rideCode,
-            });
-          } else {
-            const isObjectId = userId && userId.match(/^[0-9a-fA-F]{24}$/);
-            let rider = (rideDoc.riders || []).find(
-              (r) =>
-                (userId && r.userId && String(r.userId) === String(userId)) ||
-                (isObjectId && r._id && r._id.toString() === String(userId)) ||
-                (userName && r.name && r.name.toLowerCase() === userName.toLowerCase())
-            );
-
-            if (!rider) {
-              rideDoc.riders.push({
-                userId,
-                name: userName.trim(),
-                joinedAt: new Date(),
-                location: {
-                  latitude,
-                  longitude,
-                  updatedAt: updateDate,
+            Ride.updateOne(
+              { rideCode },
+              {
+                $set: {
+                  captainLocation: {
+                    latitude,
+                    longitude,
+                    updatedAt: updateDate,
+                  },
+                  captainId: userId,
+                  captainUserId: userId,
                 },
-              });
-            } else {
-              rider.location = {
-                latitude,
-                longitude,
-                updatedAt: updateDate,
-              };
-              if (userId && !rider.userId) {
-                rider.userId = userId;
               }
-            }
-
-            await rideDoc.save();
-
-            console.log('RYDO LOCATION SAVED:', {
-              userId,
-              role: 'rider',
-              rideCode,
-            });
+            ).catch((err) => console.error('RYDO: Captain location persist error:', err.message));
+          } else {
+            // Targeted atomic positional update
+            Ride.updateOne(
+              { rideCode, 'riders.userId': userId },
+              {
+                $set: {
+                  'riders.$.location': {
+                    latitude,
+                    longitude,
+                    updatedAt: updateDate,
+                  },
+                },
+              }
+            )
+              .then((result) => {
+                if (result.matchedCount === 0) {
+                  // Rider not in array with userId yet, push them
+                  return Ride.updateOne(
+                    { rideCode },
+                    {
+                      $push: {
+                        riders: {
+                          userId,
+                          name: userName.trim(),
+                          joinedAt: new Date(),
+                          location: {
+                            latitude,
+                            longitude,
+                            updatedAt: updateDate,
+                          },
+                        },
+                      },
+                    }
+                  );
+                }
+              })
+              .catch((err) => console.error('RYDO: Rider location persist error:', err.message));
           }
         }
       } catch (error) {
@@ -373,8 +381,11 @@ function initializeRideSocket(io) {
         if (!rideCode) return;
 
         const roomState = getOrCreateRoom(rideCode);
+        let activeSosEvents = [];
         try {
-          const dbRide = await Ride.findOne({ rideCode });
+          const dbRide = await Ride.findOne({ rideCode })
+            .select('captainLocation captainName riders sosEvents')
+            .lean();
           if (dbRide) {
             if (
               !roomState.captainLocation &&
@@ -420,42 +431,35 @@ function initializeRideSocket(io) {
                 }
               });
             }
+
+            if (Array.isArray(dbRide.sosEvents)) {
+              activeSosEvents = dbRide.sosEvents
+                .filter((e) => e.status === 'active')
+                .map((e) => ({
+                  eventId: e._id.toString(),
+                  sosId: e._id.toString(),
+                  rideCode,
+                  name: e.name || e.riderName,
+                  riderName: e.riderName || e.name,
+                  role: e.role || 'rider',
+                  userId: e.userId,
+                  bikeNumber: e.bikeNumber,
+                  bloodGroup: e.bloodGroup,
+                  emergencyContact: e.emergencyContact,
+                  location: {
+                    latitude: Number(e.latitude),
+                    longitude: Number(e.longitude),
+                  },
+                  triggeredAt: e.triggeredAt,
+                  status: e.status,
+                }));
+            }
           }
         } catch (dbErr) {
           console.error('RYDO: DB snapshot hydration error:', dbErr);
         }
 
         const ridersSnapshot = Array.from(roomState.riderLocations.values());
-
-        let activeSosEvents = [];
-        try {
-          const snapshotRide = await Ride.findOne({ rideCode });
-          if (snapshotRide && Array.isArray(snapshotRide.sosEvents)) {
-            activeSosEvents = snapshotRide.sosEvents
-              .filter((e) => e.status === 'active')
-              .map((e) => ({
-                eventId: e._id.toString(),
-                sosId: e._id.toString(),
-                rideCode,
-                name: e.name || e.riderName,
-                riderName: e.riderName || e.name,
-                role: e.role || 'rider',
-                userId: e.userId,
-                bikeNumber: e.bikeNumber,
-                bloodGroup: e.bloodGroup,
-                emergencyContact: e.emergencyContact,
-                location: {
-                  latitude: e.latitude,
-                  longitude: e.longitude,
-                },
-                latitude: e.latitude,
-                longitude: e.longitude,
-                triggeredAt: e.triggeredAt ? new Date(e.triggeredAt).toISOString() : new Date().toISOString(),
-                createdAt: e.triggeredAt ? new Date(e.triggeredAt).toISOString() : new Date().toISOString(),
-                status: e.status,
-              }));
-          }
-        } catch (e) { }
 
         socket.emit('locationsSnapshot', {
           success: true,
@@ -718,6 +722,27 @@ function initializeRideSocket(io) {
         io.to(rideCode).emit('rideEnded', { rideCode, isStarted: false, status: 'ended' });
       } catch (err) {
         console.error('RYDO: endRide socket error:', err);
+      }
+    });
+
+    /* =================================================
+       SET / UPDATE ROUTE
+    ================================================= */
+    socket.on('setRoute', async (data) => {
+      try {
+        const rideCode = String(data?.rideCode || socket.rideCode || '').toUpperCase().trim();
+        if (!rideCode || !data?.route) return;
+        const updatedRide = await Ride.findOneAndUpdate(
+          { rideCode },
+          { $set: { route: data.route } },
+          { new: true }
+        ).lean();
+        if (updatedRide) {
+          io.to(rideCode).emit('routeUpdated', { rideCode, route: updatedRide.route, ride: updatedRide });
+          io.to(rideCode).emit('rideUpdated', { rideCode, ride: updatedRide });
+        }
+      } catch (err) {
+        console.error('RYDO: setRoute socket error:', err);
       }
     });
 

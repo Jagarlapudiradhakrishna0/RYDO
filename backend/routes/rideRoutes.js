@@ -271,102 +271,45 @@ router.post(
         });
       }
 
+      const tStart = Date.now();
       let rideCode;
-
       let existingRide;
+      const tCodeStart = Date.now();
 
       do {
-        rideCode =
-          generateRideCode();
+        rideCode = generateRideCode();
+        existingRide = await Ride.exists({ rideCode });
+      } while (existingRide);
 
-        existingRide =
-          await Ride.findOne({
-            rideCode,
-          });
-      } while (
-        existingRide
-      );
+      const codeCheckTime = Date.now() - tCodeStart;
 
-      const ride =
-        await Ride.create({
-          rideCode,
+      const tDbCreateStart = Date.now();
+      const ride = await Ride.create({
+        rideCode,
+        rideName: cleanRideName,
+        captainName: cleanCaptainName,
+        status: 'ready',
+        isStarted: false,
+        riders: [],
+        captainLocation: null,
+        route: {
+          start: null,
+          stops: [],
+          destination: null,
+          coordinates: [],
+          distanceMeters: 0,
+          durationSeconds: 0,
+          distanceKm: 0,
+          durationMinutes: 0,
+        },
+      });
+      const dbCreateTime = Date.now() - tDbCreateStart;
 
-          rideName:
-            cleanRideName,
-
-          captainName:
-            cleanCaptainName,
-
-          status:
-            'ready',
-
-          isStarted:
-            false,
-
-          riders: [],
-
-          captainLocation:
-            null,
-
-          route: {
-            start:
-              null,
-
-            stops:
-              [],
-
-            destination:
-              null,
-
-            coordinates:
-              [],
-
-            distanceMeters:
-              0,
-
-            durationSeconds:
-              0,
-
-            distanceKm:
-              0,
-
-            durationMinutes:
-              0,
-          },
-        });
-
-      console.log(
-        '================================'
-      );
-
-      console.log(
-        'RYDO: RIDE CREATED'
-      );
-
-      console.log(
-        'Ride Code:',
-        ride.rideCode
-      );
-
-      console.log(
-        'Ride Name:',
-        ride.rideName
-      );
-
-      console.log(
-        'Captain:',
-        ride.captainName
-      );
-
-      console.log(
-        '================================'
-      );
+      console.log(`[PERF CREATE RIDE] Code check: ${codeCheckTime}ms | DB Create: ${dbCreateTime}ms | Total: ${Date.now() - tStart}ms | Code: ${ride.rideCode}`);
 
       return res.status(201).json({
         success: true,
-
-        message:
-          'Ride created successfully',
+        message: 'Ride created successfully',
 
         ride: {
           id:
@@ -465,82 +408,70 @@ router.post(
         });
       }
 
-      const ride =
-        await Ride.findOne({
-          rideCode:
-            code,
-        });
+      const tStart = Date.now();
+      // Check if rider already exists in this ride
+      const tLookupStart = Date.now();
+      const ride = await Ride.findOne(
+        { rideCode: code },
+        { rideCode: 1, rideName: 1, captainName: 1, riders: 1, isStarted: 1, status: 1, captainLocation: 1, route: 1 }
+      ).lean();
+      const lookupTime = Date.now() - tLookupStart;
 
       if (!ride) {
         return res.status(404).json({
           success: false,
-
-          message:
-            'Ride not found. Check the ride code.',
+          message: 'Ride not found. Check the ride code.',
         });
       }
 
-      const existingRider =
-        ride.riders.find(
-          (rider) =>
-            (riderUserId && rider.userId && String(rider.userId) === riderUserId) ||
-            rider.name.toLowerCase() === name.toLowerCase()
-        );
+      const existingRider = (ride.riders || []).find(
+        (rider) =>
+          (riderUserId && rider.userId && String(rider.userId) === riderUserId) ||
+          rider.name.toLowerCase() === name.toLowerCase()
+      );
+
+      const tUpdateStart = Date.now();
+      let updatedRiders = ride.riders || [];
 
       if (existingRider) {
-        if (riderUserId && !existingRider.userId) {
-          existingRider.userId = riderUserId;
-        }
+        // Atomic targeted update on the specific rider element
+        await Ride.updateOne(
+          { rideCode: code, 'riders._id': existingRider._id },
+          { $set: { 'riders.$.name': name, ...(riderUserId ? { 'riders.$.userId': riderUserId } : {}) } }
+        );
         existingRider.name = name;
-        await ride.save();
+        if (riderUserId) existingRider.userId = riderUserId;
       } else {
-        ride.riders.push({
+        const newRider = {
           userId: riderUserId || new mongoose.Types.ObjectId().toString(),
           name,
           joinedAt: new Date(),
           location: null,
-        });
-
-        await ride.save();
+        };
+        // Atomic targeted push
+        await Ride.updateOne(
+          { rideCode: code },
+          { $push: { riders: newRider } }
+        );
+        updatedRiders.push(newRider);
       }
+      const updateTime = Date.now() - tUpdateStart;
 
-      console.log(
-        `RYDO: ${name} (userId: ${riderUserId}) joined ride ${ride.rideCode}`
-      );
+      console.log(`[PERF JOIN RIDE] Lookup: ${lookupTime}ms | Update: ${updateTime}ms | Total: ${Date.now() - tStart}ms | Ride: ${code}`);
 
       return res.json({
         success: true,
-
-        message:
-          'Joined ride successfully',
-
+        message: 'Joined ride successfully',
         ride: {
-          id:
-            ride._id,
-
-          rideCode:
-            ride.rideCode,
-
-          rideName:
-            ride.rideName,
-
-          captainName:
-            ride.captainName,
-
-          riders:
-            ride.riders,
-
-          isStarted:
-            ride.isStarted,
-
-          status:
-            ride.status,
-
-          captainLocation:
-            ride.captainLocation,
-
-          route:
-            ride.route,
+          id: ride._id,
+          rideCode: ride.rideCode,
+          rideName: ride.rideName,
+          captainName: ride.captainName,
+          riders: updatedRiders,
+          isStarted: ride.isStarted,
+          status: ride.status,
+          captainLocation: ride.captainLocation,
+          route: ride.route,
         },
       });
 
@@ -569,6 +500,7 @@ router.post(
 router.get(
   '/:rideCode',
   async (req, res) => {
+    const tStart = Date.now();
     try {
       const rideCode =
         String(
@@ -580,7 +512,7 @@ router.get(
       const ride =
         await Ride.findOne({
           rideCode,
-        });
+        }).lean();
 
       if (!ride) {
         return res.status(404).json({
@@ -590,6 +522,8 @@ router.get(
             'Ride not found',
         });
       }
+
+      console.log(`[PERF GET RIDE] DB: ${Date.now() - tStart}ms | Ride: ${rideCode}`);
 
       return res.json({
         success: true,
@@ -842,14 +776,6 @@ router.patch(
         stopLocations.push(
           stopLocation
         );
-
-        await new Promise(
-          (resolve) =>
-            setTimeout(
-              resolve,
-              1000
-            )
-        );
       }
 
       console.log(
@@ -990,6 +916,20 @@ router.patch(
       console.log(
         '================================'
       );
+
+      const io = req.app.get('io');
+      if (io) {
+        console.log('[RYDO SOCKET] Broadcasting routeUpdated to ride room:', ride.rideCode);
+        io.to(rideCode).emit('routeUpdated', {
+          rideCode: ride.rideCode,
+          route: ride.route,
+          ride,
+        });
+        io.to(rideCode).emit('rideUpdated', {
+          rideCode: ride.rideCode,
+          ride,
+        });
+      }
 
       return res.json({
         success: true,
@@ -1638,6 +1578,7 @@ router.patch(
 router.get(
   '/:rideCode/locations',
   async (req, res) => {
+    const tStart = Date.now();
     try {
       const rideCode =
         String(
@@ -1649,7 +1590,9 @@ router.get(
       const ride =
         await Ride.findOne({
           rideCode,
-        });
+        })
+          .select('rideCode captainLocation captainId captainUserId captainName riders')
+          .lean();
 
       if (!ride) {
         return res.status(404).json({
@@ -1657,6 +1600,8 @@ router.get(
           message: 'Ride not found',
         });
       }
+
+      console.log(`[PERF GET LOCATIONS] DB: ${Date.now() - tStart}ms | Ride: ${rideCode}`);
 
       const riders = (ride.riders || []).map((rider) => {
         const hasLoc =

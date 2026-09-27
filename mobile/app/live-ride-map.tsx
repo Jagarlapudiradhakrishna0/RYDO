@@ -3,6 +3,7 @@ import React, {
   useEffect,
   useRef,
   useState,
+  useMemo,
 } from 'react';
 
 import {
@@ -22,13 +23,7 @@ import {
   useLocalSearchParams,
 } from 'expo-router';
 
-import MapView, {
-  Marker,
-  Polyline,
-  LatLng,
-  UrlTile,
-} from 'react-native-maps';
-
+import RydoMap from '@/components/RydoMap';
 import * as Location from 'expo-location';
 
 import { io as SocketIO } from 'socket.io-client';
@@ -57,6 +52,15 @@ const OSRM_URL =
 type Coordinate = {
   latitude: number;
   longitude: number;
+};
+
+type LatLng = Coordinate;
+
+type Region = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
 };
 
 type Rider = {
@@ -156,7 +160,7 @@ export default function LiveRideMap() {
   =================================================== */
 
   const mapRef =
-    useRef<MapView | null>(null);
+    useRef<any>(null);
 
   const [mapReady, setMapReady] =
     useState(false);
@@ -220,6 +224,31 @@ export default function LiveRideMap() {
 
   const [routeLoading, setRouteLoading] =
     useState(true);
+
+  const mapInitialRegion: Region = useMemo(() => {
+    if (location) {
+      return {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
+      };
+    }
+    if (routeData.start) {
+      return {
+        latitude: routeData.start.latitude,
+        longitude: routeData.start.longitude,
+        latitudeDelta: 0.08,
+        longitudeDelta: 0.08,
+      };
+    }
+    return {
+      latitude: 17.9689,
+      longitude: 79.5941,
+      latitudeDelta: 0.08,
+      longitudeDelta: 0.08,
+    };
+  }, [location, routeData.start]);
 
 
   /* ===================================================
@@ -1812,428 +1841,53 @@ export default function LiveRideMap() {
           style={styles.mapContainer}
         >
 
-          {location ? (
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              onMapReady={() =>
-                setMapReady(true)
-              }
-
-              initialRegion={{
-                latitude:
-                  location.latitude,
-
-                longitude:
-                  location.longitude,
-
-                latitudeDelta:
-                  0.08,
-
-                longitudeDelta:
-                  0.08,
-              }}
-
-              showsUserLocation={false}
-
-              showsMyLocationButton={
-                false
-              }
-
-              showsCompass={
-                !navigationMode
-              }
-
-              rotateEnabled={true}
-
-              pitchEnabled={true}
-
-              zoomEnabled={true}
-
-              scrollEnabled={
-                !navigationMode
-              }
-
-              toolbarEnabled={false}
-
-              mapType="none"
-
-              mapPadding={{
-                top: 0,
-                right: 0,
-                bottom: 0,
-                left: 0,
-              }}
-            >
-              <UrlTile
-                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                maximumZ={19}
-                flipY={false}
-                zIndex={-1}
-              />
-              {/* =====================================
-                  BLUE ROAD ROUTE
-              ===================================== */}
-
-              {roadRoute.length >
-                1 && (
-                <Polyline
-                  coordinates={
-                    roadRoute
+          <RydoMap
+            ref={mapRef}
+            style={styles.map}
+            initialRegion={mapInitialRegion}
+            roadRoute={roadRoute}
+            emergencyRoute={emergencyRoute}
+            riderLocation={
+              location
+                ? {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    name: myName || 'You',
                   }
-
-                  strokeWidth={6}
-
-                  strokeColor="#1677FF"
-
-                  lineCap="round"
-
-                  lineJoin="round"
-
-                  zIndex={5}
-                />
-              )}
-
-              {/* =====================================
-                  EMERGENCY SOS ROUTE (RED)
-              ===================================== */}
-
-              {emergencyRoute.length > 1 && (
-                <Polyline
-                  coordinates={emergencyRoute}
-                  strokeColor="#EF4444"
-                  strokeWidth={6}
-                  lineCap="round"
-                  lineJoin="round"
-                  zIndex={40}
-                />
-              )}
-
-              {/* =====================================
-                  OWN LOCATION (Blue — Rider or Captain)
-              ===================================== */}
-
-              <Marker
-                coordinate={{
-                  latitude:
-                    location.latitude,
-
-                  longitude:
-                    location.longitude,
-                }}
-
-                title={
-                  isRider
-                    ? `You (${myName || 'Rider'})`
-                    : `Captain: ${myName || 'Captain'}`
-                }
-
-                description="Your live location"
-
-                anchor={{
-                  x: 0.5,
-                  y: 0.5,
-                }}
-
-                flat={true}
-
-                rotation={
-                  navigationMode
-                    ? heading
-                    : 0
-                }
-
-                zIndex={20}
-              >
-                <View
-                  style={
-                    styles.currentLocationOuter
+                : null
+            }
+            captainLocation={
+              liveCaptainMember
+                ? {
+                    latitude: liveCaptainMember.latitude,
+                    longitude: liveCaptainMember.longitude,
+                    name: liveCaptainMember.userName,
                   }
-                >
-                  <View
-                    style={
-                      styles.currentLocationInner
-                    }
-                  >
-                    <View
-                      style={
-                        styles.navigationArrow
-                      }
-                    />
-                  </View>
-                </View>
-              </Marker>
-
-              {/* =====================================
-                  CAPTAIN LIVE MARKER (green)
-                  Shown on rider's map
-              ===================================== */}
-
-              {isRider &&
-                liveCaptainMember && (
-                  <Marker
-                    coordinate={{
-                      latitude:
-                        liveCaptainMember.latitude,
-
-                      longitude:
-                        liveCaptainMember.longitude,
-                    }}
-
-                    title={`Captain: ${liveCaptainMember.userName}`}
-
-                    description="Captain live location"
-
-                    anchor={{
-                      x: 0.5,
-                      y: 0.5,
-                    }}
-
-                    zIndex={25}
-                  >
-                    <View
-                      style={
-                        styles.captainLiveMarker
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.captainLiveText
-                        }
-                      >
-                        C
-                      </Text>
-                    </View>
-                  </Marker>
-                )}
-
-              {/* =====================================
-                  OTHER RIDERS LIVE MARKERS (yellow)
-                  Shown on both captain map and rider map
-              ===================================== */}
-
-              {liveOtherRiders.map(
-                (member) => (
-                  <Marker
-                    key={member.memberId}
-
-                    coordinate={{
-                      latitude:
-                        member.latitude,
-
-                      longitude:
-                        member.longitude,
-                    }}
-
-                    title={member.userName}
-
-                    description="Rider live location"
-
-                    anchor={{
-                      x: 0.5,
-                      y: 0.5,
-                    }}
-
-                    zIndex={15}
-                  >
-                    <View
-                      style={
-                        styles.riderLiveMarker
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.riderLiveText
-                        }
-                      >
-                        R
-                      </Text>
-                    </View>
-                  </Marker>
-                )
-              )}
-
-              {/* =====================================
-                  START MARKER (white S)
-              ===================================== */}
-
-              {routeData.start && (
-                <Marker
-                  coordinate={{
-                    latitude:
-                      routeData
-                        .start
-                        .latitude,
-
-                    longitude:
-                      routeData
-                        .start
-                        .longitude,
-                  }}
-
-                  title="START"
-
-                  description={
-                    routeData.start.name
-                  }
-
-                  zIndex={10}
-                >
-                  <View
-                    style={
-                      styles.startMarker
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.startMarkerText
-                      }
-                    >
-                      S
-                    </Text>
-                  </View>
-                </Marker>
-              )}
-
-              {/* =====================================
-                  STOPS
-              ===================================== */}
-
-              {routeData.stops.map(
-                (stop, index) => (
-                  <Marker
-                    key={`stop-${index}`}
-
-                    coordinate={{
-                      latitude:
-                        stop.latitude,
-
-                      longitude:
-                        stop.longitude,
-                    }}
-
-                    title={`STOP ${index + 1}`}
-
-                    description={
-                      stop.name
-                    }
-
-                    zIndex={10}
-                  >
-                    <View
-                      style={
-                        styles.stopMarker
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.stopMarkerText
-                        }
-                      >
-                        {index + 1}
-                      </Text>
-                    </View>
-                  </Marker>
-                )
-              )}
-
-              {/* =====================================
-                  DESTINATION
-              ===================================== */}
-
-              {routeData.destination && (
-                <Marker
-                  coordinate={{
-                    latitude:
-                      routeData
-                        .destination
-                        .latitude,
-
-                    longitude:
-                      routeData
-                        .destination
-                        .longitude,
-                  }}
-
-                  title="DESTINATION"
-
-                  description={
-                    routeData
-                      .destination
-                      .name
-                  }
-
-                  zIndex={12}
-                >
-                  <View
-                    style={
-                      styles.destinationMarker
-                    }
-                  >
-                    <View
-                      style={
-                        styles.destinationInner
-                      }
-                    />
-                  </View>
-                </Marker>
-              )}
-
-              {/* =====================================
-                  ACTIVE SOS EMERGENCY MARKER
-              ===================================== */}
-
-              {activeSosEvent && (
-                <Marker
-                  key={`sos-marker-${activeSosEvent.eventId || activeSosEvent.userId || 'emergency'}`}
-                  coordinate={{
+                : null
+            }
+            liveRiders={liveOtherRiders.map((r) => ({
+              id: r.memberId,
+              name: r.userName,
+              latitude: r.latitude,
+              longitude: r.longitude,
+              isLive: true,
+            }))}
+            startLocation={routeData.start ? { latitude: routeData.start.latitude, longitude: routeData.start.longitude, name: routeData.start.name } : null}
+            stops={routeData.stops?.map((s) => ({ latitude: s.latitude, longitude: s.longitude, name: s.name })) || []}
+            destinationLocation={routeData.destination ? { latitude: routeData.destination.latitude, longitude: routeData.destination.longitude, name: routeData.destination.name } : null}
+            activeSosEvent={
+              activeSosEvent
+                ? {
                     latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
                     longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
-                  }}
-                  title={`🚨 SOS: ${activeSosEvent.name || activeSosEvent.riderName}`}
-                  description="EMERGENCY LOCATION • TAP FOR DETAILS"
-                  onPress={() => setSosOverlayVisible(true)}
-                  tracksViewChanges={true}
-                  zIndex={100}
-                >
-                  <View style={styles.sosMarkerWrapper}>
-                    <View style={styles.sosMarkerOuter}>
-                      <Text style={styles.sosMarkerIcon}>🚨</Text>
-                    </View>
-                    <View style={styles.sosMarkerBadge}>
-                      <Text style={styles.sosMarkerBadgeText} numberOfLines={1}>
-                        SOS • {activeSosEvent.name || activeSosEvent.riderName} ({activeSosEvent.role?.toUpperCase()})
-                      </Text>
-                    </View>
-                  </View>
-                </Marker>
-              )}
-
-            </MapView>
-          ) : (
-            <View
-              style={
-                styles.loadingMap
-              }
-            >
-              <Text
-                style={
-                  styles.loadingTitle
-                }
-              >
-                LOCATING
-              </Text>
-
-              <Text
-                style={
-                  styles.loadingText
-                }
-              >
-                Getting your current
-                location...
-              </Text>
-            </View>
-          )}
+                    name: activeSosEvent.name || activeSosEvent.riderName,
+                    role: activeSosEvent.role,
+                  }
+                : null
+            }
+            onSosPress={() => setSosOverlayVisible(true)}
+            onMapReady={() => setMapReady(true)}
+          />
 
           {/* =========================================
               MAP TOP LEFT LABEL
