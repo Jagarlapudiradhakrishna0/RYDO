@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -262,6 +263,7 @@ export default function RiderDashboard() {
   const socketRef = useRef<Socket | null>(null);
   const lastLocationUploadRef = useRef(0);
   const riderDbIdRef = useRef<string>(paramUserId ? String(paramUserId).trim() : '');
+  const hasNavigatedToLiveMapRef = useRef(false);
 
   // SOS Emergency States
   const [activeSosEvent, setActiveSosEvent] = useState<SosEvent | null>(null);
@@ -677,6 +679,34 @@ export default function RiderDashboard() {
 
 
   /* ===================================================
+     HANDLE RIDE STARTED
+  =================================================== */
+
+  const handleRideStarted = useCallback(
+    (data?: any) => {
+      if (!rideCode) return;
+      const code = String(rideCode).toUpperCase().trim();
+      console.log('[RIDESTART] Rider received instant ride start event:', data);
+      if (hasNavigatedToLiveMapRef.current) return;
+      hasNavigatedToLiveMapRef.current = true;
+      setRide((prev) => (prev ? { ...prev, isStarted: true, status: 'live' } : prev));
+      router.push({
+        pathname: '/live-ride-map' as any,
+        params: {
+          rideCode: code,
+          rideName: data?.ride?.rideName || displayRideName,
+          captainName: data?.ride?.captainName || displayCaptain,
+          role: 'rider',
+          userName: String(riderName || currentUser?.name || 'Rider').trim(),
+          userId: myMemberId,
+        },
+      });
+    },
+    [rideCode, displayRideName, displayCaptain, riderName, currentUser?.name, myMemberId]
+  );
+
+
+  /* ===================================================
      SOCKET.IO — CONNECT & REALTIME SYNC
   =================================================== */
 
@@ -818,21 +848,9 @@ export default function RiderDashboard() {
       });
     });
 
-    const handleRideStarted = (data: any) => {
-      console.log('[RIDESTART] Rider received instant ride start event:', data);
-      setRide((prev) => (prev ? { ...prev, isStarted: true, status: 'live' } : prev));
-      router.push({
-        pathname: '/live-ride-map' as any,
-        params: {
-          rideCode: code,
-          rideName: displayRideName,
-          captainName: displayCaptain,
-          role: 'rider',
-          userName: String(riderName || currentUser?.name || 'Rider').trim(),
-          userId: myMemberId,
-        },
-      });
-    };
+    socket.on('ride:started', handleRideStarted);
+    socket.on('rideStarted', handleRideStarted);
+    socket.on('startRide', handleRideStarted);
 
     const handleRouteUpdated = (data: any) => {
       console.log('[RYDO ROUTE] Rider received route update event:', data);
@@ -856,6 +874,9 @@ export default function RiderDashboard() {
       console.log('[RYDO RIDE] Rider received rideUpdated event:', data);
       if (data.ride) {
         setRide(data.ride);
+        if (data.ride.isStarted || data.ride.status === 'live') {
+          handleRideStarted(data);
+        }
         if (Array.isArray(data.ride.route?.coordinates) && data.ride.route.coordinates.length > 1) {
           setRoadRoute(data.ride.route.coordinates);
           setRouteLoading(false);
@@ -914,6 +935,7 @@ export default function RiderDashboard() {
       socket.off('locationUpdated');
       socket.off('ride:started', handleRideStarted);
       socket.off('rideStarted', handleRideStarted);
+      socket.off('startRide', handleRideStarted);
       socket.off('routeUpdated', handleRouteUpdated);
       socket.off('route:updated', handleRouteUpdated);
       socket.off('rideUpdated');
@@ -946,6 +968,10 @@ export default function RiderDashboard() {
 
       const fetchedRide = data.ride as Ride;
       setRide(fetchedRide);
+
+      if (fetchedRide.isStarted || fetchedRide.status === 'live') {
+        handleRideStarted({ ride: fetchedRide });
+      }
 
       if (
         Array.isArray(fetchedRide.route?.coordinates) &&
