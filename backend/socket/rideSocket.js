@@ -326,8 +326,16 @@ function initializeRideSocket(io) {
             ).catch((err) => console.error('RYDO: Captain location persist error:', err.message));
           } else {
             // Targeted atomic positional update
+            const cleanName = (userName || '').trim();
+            const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             Ride.updateOne(
-              { rideCode, 'riders.userId': userId },
+              {
+                rideCode,
+                $or: [
+                  { 'riders.userId': userId },
+                  ...(cleanName ? [{ 'riders.name': { $regex: new RegExp(`^${escapedName}$`, 'i') } }] : []),
+                ],
+              },
               {
                 $set: {
                   'riders.$.location': {
@@ -335,19 +343,23 @@ function initializeRideSocket(io) {
                     longitude,
                     updatedAt: updateDate,
                   },
+                  'riders.$.userId': userId,
                 },
               }
             )
               .then((result) => {
-                if (result.matchedCount === 0) {
-                  // Rider not in array with userId yet, push them
+                if (result.matchedCount === 0 && cleanName) {
+                  // Rider not in array with userId or name yet, push them once
                   return Ride.updateOne(
-                    { rideCode },
+                    {
+                      rideCode,
+                      'riders.name': { $not: new RegExp(`^${escapedName}$`, 'i') },
+                    },
                     {
                       $push: {
                         riders: {
                           userId,
-                          name: userName.trim(),
+                          name: cleanName,
                           joinedAt: new Date(),
                           location: {
                             latitude,

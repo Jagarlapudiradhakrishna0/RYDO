@@ -361,8 +361,21 @@ export default function RiderDashboard() {
         );
 
 
+  const uniqueRiders = useMemo(() => {
+    const seen = new Set<string>();
+    const result: typeof riders = [];
+    const capName = (displayCaptain || '').trim().toLowerCase();
+    for (const r of riders) {
+      const key = (r.name || '').trim().toLowerCase();
+      if (!key || seen.has(key) || key === capName) continue;
+      seen.add(key);
+      result.push(r);
+    }
+    return result;
+  }, [riders, displayCaptain]);
+
   const totalMembers =
-    riders.length + 1;
+    uniqueRiders.length + 1;
 
 
   /* ===================================================
@@ -2178,7 +2191,7 @@ export default function RiderDashboard() {
 
           {/* RIDERS */}
 
-          {riders.map(
+          {uniqueRiders.map(
             (rider, index) => {
 
               const isYou =
@@ -2287,7 +2300,7 @@ export default function RiderDashboard() {
 
 
           {!loading &&
-            riders.length === 0 && (
+            uniqueRiders.length === 0 && (
 
               <View
                 style={

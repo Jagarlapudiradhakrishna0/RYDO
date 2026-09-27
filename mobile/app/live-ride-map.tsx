@@ -849,6 +849,19 @@ export default function LiveRideMap() {
         stops,
       });
 
+      if (Array.isArray(backendRoute.coordinates) && backendRoute.coordinates.length > 1) {
+        setRoadRoute(backendRoute.coordinates);
+        setRouteLoading(false);
+      }
+
+      if (backendRoute.distanceMeters && Number(backendRoute.distanceMeters) > 0) {
+        setDistanceKm(Number(backendRoute.distanceMeters) / 1000);
+      }
+
+      if (backendRoute.durationSeconds && Number(backendRoute.durationSeconds) > 0) {
+        setDurationMinutes(Math.max(1, Math.round(Number(backendRoute.durationSeconds) / 60)));
+      }
+
     } catch (error) {
       console.log(
         'RYDO: Live ride fetch error:',
@@ -1253,6 +1266,8 @@ export default function LiveRideMap() {
       fetchRoadRoute();
     }
   }, [
+    location?.latitude,
+    location?.longitude,
     routeData.destination?.latitude,
     routeData.destination?.longitude,
     routeData.start?.latitude,
@@ -1754,11 +1769,24 @@ export default function LiveRideMap() {
 
 
   /* ===================================================
-     TOTAL MEMBERS
+     UNIQUE RIDERS & TOTAL MEMBERS
   =================================================== */
 
+  const uniqueRiders = useMemo(() => {
+    const seen = new Set<string>();
+    const result: typeof riders = [];
+    const capName = (displayCaptain || '').trim().toLowerCase();
+    for (const r of riders) {
+      const key = (r.name || '').trim().toLowerCase();
+      if (!key || seen.has(key) || key === capName) continue;
+      seen.add(key);
+      result.push(r);
+    }
+    return result;
+  }, [riders, displayCaptain]);
+
   const totalMembers =
-    riders.length + 1;
+    uniqueRiders.length + 1;
 
 
   /* ===================================================
@@ -1786,20 +1814,31 @@ export default function LiveRideMap() {
           style={styles.header}
         >
 
-          <View>
-            <Text
-              style={styles.brand}
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={handleBack}
+              style={styles.headerBackBtn}
+              activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              RYDO
-            </Text>
+              <Text style={styles.headerBackText}>←</Text>
+            </TouchableOpacity>
 
-            <Text
-              style={styles.modeText}
-            >
-              {isRider
-                ? 'RIDER NAVIGATION'
-                : 'CAPTAIN MODE'}
-            </Text>
+            <View>
+              <Text
+                style={styles.brand}
+              >
+                RYDO
+              </Text>
+
+              <Text
+                style={styles.modeText}
+              >
+                {isRider
+                  ? 'RIDER NAVIGATION'
+                  : 'CAPTAIN MODE'}
+              </Text>
+            </View>
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -2310,7 +2349,7 @@ export default function LiveRideMap() {
 
             {/* RIDERS */}
 
-            {riders.map(
+            {uniqueRiders.map(
               (
                 rider,
                 index
@@ -2429,7 +2468,7 @@ export default function LiveRideMap() {
               }
             )}
 
-            {riders.length === 0 && (
+            {uniqueRiders.length === 0 && (
               <View
                 style={
                   styles.noRiders
@@ -2490,30 +2529,29 @@ export default function LiveRideMap() {
             </Text>
           </View>
 
-        </ScrollView>
+          {/* =========================================
+              BACK BUTTON
+          ========================================= */}
 
-
-        {/* =========================================
-            BACK BUTTON
-        ========================================= */}
-
-        <TouchableOpacity
-          activeOpacity={0.8}
-          style={
-            styles.backButton
-          }
-          onPress={
-            handleBack
-          }
-        >
-          <Text
+          <TouchableOpacity
+            activeOpacity={0.8}
             style={
-              styles.backButtonText
+              styles.backButton
+            }
+            onPress={
+              handleBack
             }
           >
-            ← BACK
-          </Text>
-        </TouchableOpacity>
+            <Text
+              style={
+                styles.backButtonText
+              }
+            >
+              ← BACK
+            </Text>
+          </TouchableOpacity>
+
+        </ScrollView>
 
         <SosEmergencyOverlay
           visible={sosOverlayVisible}
@@ -2600,6 +2638,18 @@ const styles =
       borderBottomWidth: 1,
       borderBottomColor:
         '#181818',
+    },
+
+    headerBackBtn: {
+      paddingRight: 12,
+      paddingVertical: 4,
+      justifyContent: 'center',
+    },
+
+    headerBackText: {
+      color: '#FFFFFF',
+      fontSize: 18,
+      fontWeight: '700',
     },
 
     brand: {
@@ -3456,23 +3506,24 @@ const styles =
     =============================================== */
 
     backButton: {
-      position:
-        'absolute',
-      bottom: 18,
-      left: 22,
+      marginTop: 20,
+      marginBottom: 36,
+      marginHorizontal: 22,
+      alignSelf: 'flex-start',
       backgroundColor:
-        'rgba(0,0,0,0.82)',
+        'rgba(255,255,255,0.06)',
       borderWidth: 1,
       borderColor:
         '#292929',
-      paddingHorizontal: 14,
-      paddingVertical: 9,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 4,
     },
 
     backButtonText: {
       color:
         '#AAAAAA',
-      fontSize: 8,
+      fontSize: 9,
       fontWeight:
         '800',
       letterSpacing: 1.2,

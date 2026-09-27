@@ -517,9 +517,19 @@ router.get(
       if (!ride) {
         return res.status(404).json({
           success: false,
-
           message:
             'Ride not found',
+        });
+      }
+
+      if (Array.isArray(ride.riders)) {
+        const seen = new Set();
+        const capName = (ride.captainName || '').trim().toLowerCase();
+        ride.riders = ride.riders.filter((r) => {
+          const key = (r.name || '').trim().toLowerCase();
+          if (!key || seen.has(key) || key === capName) return false;
+          seen.add(key);
+          return true;
         });
       }
 
@@ -527,7 +537,6 @@ router.get(
 
       return res.json({
         success: true,
-
         ride,
       });
 
@@ -1361,30 +1370,43 @@ router.patch(
          FIND RIDER & UPDATE LOCATION
       ----------------------------------------------- */
 
-      const isObjectId = riderId && riderId.match(/^[0-9a-fA-F]{24}$/);
-      let rider = isObjectId ? ride.riders.id(riderId) : null;
+      const rawId = String(riderId || '').trim();
+      const cleanName = (req.body.name || req.body.userName || rawId.replace(/^rider-/i, '')).trim();
+      const isObjectId = rawId && rawId.match(/^[0-9a-fA-F]{24}$/);
+      let rider = isObjectId ? ride.riders.id(rawId) : null;
 
       if (!rider) {
         rider = ride.riders.find(
-          (r) => r.name.toLowerCase() === String(riderId).trim().toLowerCase()
+          (r) =>
+            (r.userId && (String(r.userId) === rawId || (isObjectId && String(r._id) === rawId))) ||
+            (cleanName && r.name && r.name.toLowerCase() === cleanName.toLowerCase()) ||
+            (r.name && r.name.toLowerCase() === rawId.toLowerCase())
         );
       }
 
       const updatedAt = new Date();
 
       if (!rider) {
-        // Auto-add rider if not present
-        const newRider = {
-          name: String(riderId).trim(),
-          joinedAt: new Date(),
-          location: {
-            latitude: lat,
-            longitude: lng,
-            updatedAt,
-          },
-        };
-        ride.riders.push(newRider);
-        rider = ride.riders[ride.riders.length - 1];
+        const existingByName = ride.riders.find(
+          (r) => r.name && cleanName && r.name.toLowerCase() === cleanName.toLowerCase()
+        );
+        if (existingByName) {
+          rider = existingByName;
+          rider.location = { latitude: lat, longitude: lng, updatedAt };
+        } else {
+          const newRider = {
+            userId: rawId,
+            name: cleanName || 'Rider',
+            joinedAt: new Date(),
+            location: {
+              latitude: lat,
+              longitude: lng,
+              updatedAt,
+            },
+          };
+          ride.riders.push(newRider);
+          rider = ride.riders[ride.riders.length - 1];
+        }
       } else {
         rider.location = {
           latitude: lat,
@@ -1603,7 +1625,13 @@ router.get(
 
       console.log(`[PERF GET LOCATIONS] DB: ${Date.now() - tStart}ms | Ride: ${rideCode}`);
 
-      const riders = (ride.riders || []).map((rider) => {
+      const seenRiders = new Set();
+      const riders = (ride.riders || []).filter((rider) => {
+        const key = (rider.name || '').trim().toLowerCase();
+        if (!key || seenRiders.has(key)) return false;
+        seenRiders.add(key);
+        return true;
+      }).map((rider) => {
         const hasLoc =
           rider.location &&
           Number.isFinite(Number(rider.location.latitude)) &&
