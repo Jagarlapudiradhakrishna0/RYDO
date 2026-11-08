@@ -300,22 +300,38 @@ graph TB
 
 ```
 RYDO/
+├── .github/                         # GitHub Actions CI Workflows & Community Templates
+│   ├── workflows/ci.yml             # Automated CI (Backend tests, Mobile Typecheck & Lint)
+│   ├── ISSUE_TEMPLATE/              # Structured bug reports & feature requests
+│   └── PULL_REQUEST_TEMPLATE.md     # Standardized pull request submission template
 ├── .env.example                     # Root configuration template
+├── .gitattributes                   # Cross-platform line endings and binary attributes
 ├── .gitignore                       # Production gitignore (node_modules, build artifacts, envs)
-├── API_DOCUMENTATION.md             # Complete REST API specification
-├── ARCHITECTURE.md                  # Comprehensive architectural blueprint
 ├── CHANGELOG.md                     # Modernization changelog and migration notes
 ├── CONTRIBUTING.md                  # Guidelines for open-source contributions
-├── DATABASE_SCHEMA.md               # Detailed database schemas, types, and indexes
-├── DEPLOYMENT_GUIDE.md              # Cloud deployment and EAS build manual
-├── DEVELOPMENT_STATUS.md            # Verified status of all features
-├── ENVIRONMENT_VARIABLES.md         # Comprehensive env reference guide
-├── MOBILE_APP_DOCUMENTATION.md      # Mobile screens and UI architecture
 ├── README.md                        # Master project documentation (this document)
-├── SETUP_GUIDE.md                   # Step-by-step local developer setup guide
-├── TESTING_GUIDE.md                 # Test execution and verification manual
-├── UPGRADE_REPORT.md                # Modernization audit and Expo 58 verification report
+├── SECURITY.md                      # Security policy, vulnerability reporting & disclosure
 ├── package.json                     # Root project manifest
+│
+├── docs/                            # Modular Production Documentation
+│   ├── architecture/
+│   │   ├── ARCHITECTURE.md          # Comprehensive architectural blueprint
+│   │   └── MOBILE_APP_DOCUMENTATION.md # Mobile screens and UI architecture
+│   ├── api/
+│   │   └── API_DOCUMENTATION.md     # Complete REST API & WebSocket specification
+│   ├── database/
+│   │   └── DATABASE_SCHEMA.md       # Detailed database schemas, types, and indexes
+│   ├── security/
+│   │   └── ENVIRONMENT_VARIABLES.md # Comprehensive env reference guide
+│   ├── deployment/
+│   │   └── DEPLOYMENT_GUIDE.md      # Cloud deployment and EAS build manual
+│   └── development/
+│       ├── SETUP_GUIDE.md           # Step-by-step local developer setup guide
+│       ├── TEAM_SETUP.md            # Team development & workflow reference
+│       ├── TESTING_GUIDE.md         # Test execution and verification manual
+│       ├── DEVELOPMENT_STATUS.md    # Verified status of all features
+│       ├── UPGRADE_REPORT.md        # Modernization audit and Expo 58 report
+│       └── README_VALIDATION_REPORT.md # Documentation verification report
 │
 ├── backend/                         # Node.js / Express / Socket.IO Backend
 │   ├── .env.example                 # Backend environment variable template
