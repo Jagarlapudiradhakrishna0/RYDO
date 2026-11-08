@@ -5,12 +5,12 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  StatusBar,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
@@ -208,10 +208,7 @@ export default function JoinRide() {
       style={styles.safeArea}
     >
 
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <KeyboardAvoidingView
         style={styles.container}

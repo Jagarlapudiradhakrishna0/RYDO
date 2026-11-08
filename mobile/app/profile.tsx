@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   ScrollView,
   TextInput,
   Modal,
@@ -15,6 +14,7 @@ import {
   RefreshControl,
   Switch,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
@@ -350,7 +350,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar style="light" />
 
       <View style={styles.container}>
         {/* =================================================

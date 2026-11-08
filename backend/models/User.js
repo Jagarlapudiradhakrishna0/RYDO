@@ -148,6 +148,7 @@ userSchema.methods.toSafeObject = function (options = {}) {
 ===================================================== */
 
 userSchema.index({ name: 1 });
+userSchema.index({ phoneNumber: 1 });
 
 /* =====================================================
    EXPORT

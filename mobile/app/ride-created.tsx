@@ -4,10 +4,10 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   Share,
   ScrollView,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
@@ -39,10 +39,7 @@ export default function RideCreatedScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <View style={styles.container}>
 

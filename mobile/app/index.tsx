@@ -6,21 +6,18 @@ import {
   StyleSheet,
   TouchableOpacity,
   Dimensions,
-  StatusBar,
   Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 
 const { width, height } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   return (
     <View style={styles.container}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#050505"
-      />
+      <StatusBar style="light" />
 
       {/* =====================================================
           PREMIUM BLACK BACKGROUND

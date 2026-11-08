@@ -11,10 +11,10 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   ScrollView,
   Alert,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -1157,6 +1157,16 @@ export default function RiderDashboard() {
      Calculates route starting from Rider's live location
   =================================================== */
 
+  const riderLocationKey = riderLocation
+    ? `${riderLocation.latitude.toFixed(4)},${riderLocation.longitude.toFixed(4)}`
+    : null;
+  const stopsKey = JSON.stringify(
+    (route.stops || []).map((s) => ({
+      lat: s.latitude,
+      lng: s.longitude,
+    }))
+  );
+
   const routeWaypointsKey = useMemo(() => {
     if (!route.start && !route.destination) {
       return '';
@@ -1254,17 +1264,10 @@ export default function RiderDashboard() {
 
     return pts.length >= 2 ? pts.join(';') : '';
   }, [
-    riderLocation
-      ? `${riderLocation.latitude.toFixed(4)},${riderLocation.longitude.toFixed(4)}`
-      : null,
+    riderLocationKey,
     route.start?.latitude,
     route.start?.longitude,
-    JSON.stringify(
-      (route.stops || []).map((s) => ({
-        lat: s.latitude,
-        lng: s.longitude,
-      }))
-    ),
+    stopsKey,
     route.destination?.latitude,
     route.destination?.longitude,
   ]);
@@ -3055,10 +3058,7 @@ export default function RiderDashboard() {
       }
     >
 
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
 
       <View

@@ -11,6 +11,7 @@ class TtsService {
   }
 
   private async loadVoices() {
+    if (typeof window === 'undefined') return;
     try {
       this.availableVoices = await Speech.getAvailableVoicesAsync();
       this.voicesLoaded = true;

@@ -111,6 +111,18 @@ if (!mongoUri) {
     'RYDO: MONGODB_URI is not configured in .env'
   );
 } else {
+  mongoose.connection.on('connected', () => {
+    console.log('RYDO: MongoDB connected successfully');
+  });
+
+  mongoose.connection.on('error', (err) => {
+    console.error('RYDO: MongoDB connection error:', err.message);
+  });
+
+  mongoose.connection.on('disconnected', () => {
+    console.warn('RYDO: MongoDB disconnected. Reconnection will be attempted.');
+  });
+
   mongoose
     .connect(mongoUri, {
       maxPoolSize: 50,
@@ -343,3 +355,40 @@ server.listen(
     );
   }
 );
+
+/* =====================================================
+   GRACEFUL SHUTDOWN
+===================================================== */
+
+const gracefulShutdown = async (signal) => {
+  console.log(`\nRYDO: Received ${signal}. Starting graceful shutdown...`);
+  try {
+    io.close(() => {
+      console.log('RYDO: Socket.IO connections closed.');
+    });
+
+    server.close(async () => {
+      console.log('RYDO: HTTP server closed.');
+      try {
+        await mongoose.connection.close(false);
+        console.log('RYDO: MongoDB connection closed cleanly.');
+        process.exit(0);
+      } catch (dbErr) {
+        console.error('RYDO: Error closing MongoDB connection:', dbErr);
+        process.exit(1);
+      }
+    });
+
+    // Force shutdown after 10s if hanging
+    setTimeout(() => {
+      console.error('RYDO: Forced shutdown after 10s timeout.');
+      process.exit(1);
+    }, 10000).unref();
+  } catch (err) {
+    console.error('RYDO: Shutdown error:', err);
+    process.exit(1);
+  }
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

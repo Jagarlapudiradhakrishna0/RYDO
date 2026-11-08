@@ -9,9 +9,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  StatusBar,
   Alert,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -73,7 +73,7 @@ export default function CommunicationScreen() {
   const [sending, setSending] = useState(false);
   const [activeTab, setActiveTab] = useState<'chat' | 'quick'>('chat');
 
-  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollViewRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   // Connect socket and sync state
   useEffect(() => {
@@ -204,7 +204,7 @@ export default function CommunicationScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <StatusBar style="light" />
 
       <KeyboardAvoidingView
         style={styles.container}

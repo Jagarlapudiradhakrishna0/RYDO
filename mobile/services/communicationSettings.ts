@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type VoiceGender = 'male' | 'female' | 'default';
@@ -22,6 +23,9 @@ let cachedSettings: CommunicationSettings = { ...DEFAULT_SETTINGS };
 const listeners = new Set<(settings: CommunicationSettings) => void>();
 
 export async function getCommunicationSettings(): Promise<CommunicationSettings> {
+  if (Platform.OS === 'web' && typeof window === 'undefined') {
+    return cachedSettings;
+  }
   try {
     const raw = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
     if (raw) {

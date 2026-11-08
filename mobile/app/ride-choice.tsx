@@ -4,9 +4,9 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   ScrollView,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import ProfileHeaderButton from '@/components/ProfileHeaderButton';
@@ -14,10 +14,7 @@ import ProfileHeaderButton from '@/components/ProfileHeaderButton';
 export default function RideChoiceScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <View style={styles.container}>
 

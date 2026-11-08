@@ -9,6 +9,8 @@ import React, {
 import { StyleSheet, View, ViewStyle, Platform, TouchableOpacity, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 
+const WebViewComponent = WebView as any;
+
 export type Coordinate = {
   latitude: number;
   longitude: number;
@@ -663,7 +665,7 @@ export const RydoMap = forwardRef<RydoMapRef, RydoMapProps>(
 
     return (
       <View style={[styles.container, style]}>
-        <WebView
+        <WebViewComponent
           ref={webViewRef}
           originWhitelist={['*']}
           source={{ html: LEAFLET_HTML }}
@@ -766,5 +768,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+
+RydoMap.displayName = 'RydoMap';
 
 export default RydoMap;

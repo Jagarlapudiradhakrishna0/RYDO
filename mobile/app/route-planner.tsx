@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   TextInput,
   ScrollView,
   Alert,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
@@ -265,10 +265,7 @@ export default function RoutePlanner() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <View style={styles.container}>
 

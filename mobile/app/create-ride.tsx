@@ -4,12 +4,12 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   TextInput,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { API_URL } from '@/constants/network';
@@ -105,10 +105,7 @@ export default function CreateRideScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <KeyboardAvoidingView
         style={styles.keyboard}

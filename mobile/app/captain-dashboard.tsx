@@ -10,11 +10,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   ScrollView,
   Share,
   Alert,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 
 import {
   SafeAreaView,
@@ -2203,6 +2203,14 @@ export default function CaptainDashboard() {
      LOAD ROAD ROUTE
   =================================================== */
 
+  const captainStopsKey = JSON.stringify(
+    routeData.stops.map(stop => ({
+      name: stop.name,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+    }))
+  );
+
   useEffect(() => {
     if (
       routeData.start &&
@@ -2233,24 +2241,9 @@ export default function CaptainDashboard() {
   }, [
     routeData.start?.latitude,
     routeData.start?.longitude,
-    routeData.destination
-      ?.latitude,
-    routeData.destination
-      ?.longitude,
-    JSON.stringify(
-      routeData.stops.map(
-        stop => ({
-          name:
-            stop.name,
-
-          latitude:
-            stop.latitude,
-
-          longitude:
-            stop.longitude,
-        })
-      )
-    ),
+    routeData.destination?.latitude,
+    routeData.destination?.longitude,
+    captainStopsKey,
   ]);
 
   /* ===================================================
@@ -2703,10 +2696,7 @@ export default function CaptainDashboard() {
         styles.safeArea
       }
     >
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <View
         style={

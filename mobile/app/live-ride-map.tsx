@@ -11,10 +11,10 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
   Alert,
   ScrollView,
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -232,7 +232,7 @@ export default function LiveRideMap() {
           start = { name: p.name || 'Start', latitude: Number(p.latitude), longitude: Number(p.longitude) };
         }
       }
-    } catch {}
+    } catch { }
 
     try {
       if (destinationParam) {
@@ -241,7 +241,7 @@ export default function LiveRideMap() {
           destination = { name: p.name || 'Destination', latitude: Number(p.latitude), longitude: Number(p.longitude) };
         }
       }
-    } catch {}
+    } catch { }
 
     try {
       if (stopsParam) {
@@ -252,7 +252,7 @@ export default function LiveRideMap() {
             .map((s: any) => ({ name: s.name || 'Stop', latitude: Number(s.latitude), longitude: Number(s.longitude) }));
         }
       }
-    } catch {}
+    } catch { }
 
     return { start, destination, stops };
   }, [startParam, destinationParam, stopsParam]);
@@ -270,7 +270,7 @@ export default function LiveRideMap() {
             .filter((c: any) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude));
         }
       }
-    } catch {}
+    } catch { }
     return [];
   }, [initialRouteParam]);
 
@@ -710,8 +710,8 @@ export default function LiveRideMap() {
           destination: newRoute.destination && Number.isFinite(dLat) && Number.isFinite(dLng) ? { name: newRoute.destination.name || 'Destination', latitude: dLat, longitude: dLng } : null,
           stops: Array.isArray(newRoute.stops)
             ? newRoute.stops
-                .filter((s: any) => s && Number.isFinite(Number(s.latitude)) && Number.isFinite(Number(s.longitude)))
-                .map((s: any) => ({ name: s.name || 'Stop', latitude: Number(s.latitude), longitude: Number(s.longitude) }))
+              .filter((s: any) => s && Number.isFinite(Number(s.latitude)) && Number.isFinite(Number(s.longitude)))
+              .map((s: any) => ({ name: s.name || 'Stop', latitude: Number(s.latitude), longitude: Number(s.longitude) }))
             : [],
         });
         if (Array.isArray(newRoute.coordinates) && newRoute.coordinates.length > 1) {
@@ -899,10 +899,10 @@ export default function LiveRideMap() {
       const start =
         backendRoute.start && Number.isFinite(startLat) && Number.isFinite(startLng)
           ? {
-              name: backendRoute.start.name || 'Start',
-              latitude: startLat,
-              longitude: startLng,
-            }
+            name: backendRoute.start.name || 'Start',
+            latitude: startLat,
+            longitude: startLng,
+          }
           : null;
 
       const destLat = Number(backendRoute.destination?.latitude);
@@ -910,24 +910,24 @@ export default function LiveRideMap() {
       const destination =
         backendRoute.destination && Number.isFinite(destLat) && Number.isFinite(destLng)
           ? {
-              name: backendRoute.destination.name || 'Destination',
-              latitude: destLat,
-              longitude: destLng,
-            }
+            name: backendRoute.destination.name || 'Destination',
+            latitude: destLat,
+            longitude: destLng,
+          }
           : null;
 
       const stops = Array.isArray(backendRoute.stops)
         ? backendRoute.stops
-            .filter((stop: any) => {
-              const sLat = Number(stop?.latitude);
-              const sLng = Number(stop?.longitude);
-              return stop && Number.isFinite(sLat) && Number.isFinite(sLng);
-            })
-            .map((stop: any) => ({
-              name: stop.name || 'Stop',
-              latitude: Number(stop.latitude),
-              longitude: Number(stop.longitude),
-            }))
+          .filter((stop: any) => {
+            const sLat = Number(stop?.latitude);
+            const sLng = Number(stop?.longitude);
+            return stop && Number.isFinite(sLat) && Number.isFinite(sLng);
+          })
+          .map((stop: any) => ({
+            name: stop.name || 'Stop',
+            latitude: Number(stop.latitude),
+            longitude: Number(stop.longitude),
+          }))
         : [];
 
       setRouteData((prev) => ({
@@ -994,9 +994,9 @@ export default function LiveRideMap() {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return earthRadius * c;
   };
@@ -1174,7 +1174,7 @@ export default function LiveRideMap() {
 
                 if (
                   typeof coords.heading ===
-                    'number' &&
+                  'number' &&
                   coords.heading >= 0
                 ) {
                   setHeading(
@@ -1786,7 +1786,7 @@ export default function LiveRideMap() {
                       'SOS Error',
 
                       data.message ||
-                        'Failed to send SOS.'
+                      'Failed to send SOS.'
                     );
 
                     return;
@@ -1837,8 +1837,8 @@ export default function LiveRideMap() {
   const etaText =
     durationMinutes !== null
       ? formatDuration(
-          durationMinutes
-        )
+        durationMinutes
+      )
       : '--';
 
 
@@ -1871,10 +1871,7 @@ export default function LiveRideMap() {
     <SafeAreaView
       style={styles.safeArea}
     >
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor="#000000"
-      />
+      <StatusBar style="light" />
 
       <View
         style={styles.container}
@@ -1963,19 +1960,19 @@ export default function LiveRideMap() {
             riderLocation={
               location
                 ? {
-                    latitude: location.latitude,
-                    longitude: location.longitude,
-                    name: myName || 'You',
-                  }
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  name: myName || 'You',
+                }
                 : null
             }
             captainLocation={
               liveCaptainMember
                 ? {
-                    latitude: liveCaptainMember.latitude,
-                    longitude: liveCaptainMember.longitude,
-                    name: liveCaptainMember.userName,
-                  }
+                  latitude: liveCaptainMember.latitude,
+                  longitude: liveCaptainMember.longitude,
+                  name: liveCaptainMember.userName,
+                }
                 : null
             }
             liveRiders={liveOtherRiders.map((r) => ({
@@ -1991,11 +1988,11 @@ export default function LiveRideMap() {
             activeSosEvent={
               activeSosEvent
                 ? {
-                    latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
-                    longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
-                    name: activeSosEvent.name || activeSosEvent.riderName,
-                    role: activeSosEvent.role,
-                  }
+                  latitude: Number(activeSosEvent.location?.latitude ?? activeSosEvent.latitude),
+                  longitude: Number(activeSosEvent.location?.longitude ?? activeSosEvent.longitude),
+                  name: activeSosEvent.name || activeSosEvent.riderName,
+                  role: activeSosEvent.role,
+                }
                 : null
             }
             onSosPress={() => setSosOverlayVisible(true)}
@@ -2030,8 +2027,8 @@ export default function LiveRideMap() {
                 ? 'CALCULATING'
                 : roadRoute.length >
                   0
-                ? 'LIVE ROUTE'
-                : 'WAITING'}
+                  ? 'LIVE ROUTE'
+                  : 'WAITING'}
             </Text>
           </View>
 
@@ -2062,7 +2059,7 @@ export default function LiveRideMap() {
             style={[
               styles.navigateButton,
               navigationMode &&
-                styles.navigateButtonActive,
+              styles.navigateButtonActive,
             ]}
             onPress={
               toggleNavigation
@@ -2221,86 +2218,86 @@ export default function LiveRideMap() {
 
           {(routeData.start ||
             routeData.destination) && (
-            <View
-              style={styles.routeSummary}
-            >
+              <View
+                style={styles.routeSummary}
+              >
 
-              {routeData.start && (
-                <View
-                  style={
-                    styles.routePoint
-                  }
-                >
+                {routeData.start && (
                   <View
                     style={
-                      styles.routeDotStart
-                    }
-                  />
-
-                  <View
-                    style={
-                      styles.routePointText
+                      styles.routePoint
                     }
                   >
-                    <Text
+                    <View
                       style={
-                        styles.routeSmall
+                        styles.routeDotStart
                       }
-                    >
-                      START
-                    </Text>
+                    />
 
-                    <Text
+                    <View
                       style={
-                        styles.routePlace
+                        styles.routePointText
                       }
-                      numberOfLines={1}
                     >
-                      {routeData.start.name}
-                    </Text>
+                      <Text
+                        style={
+                          styles.routeSmall
+                        }
+                      >
+                        START
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.routePlace
+                        }
+                        numberOfLines={1}
+                      >
+                        {routeData.start.name}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              )}
+                )}
 
-              {routeData.destination && (
-                <View
-                  style={
-                    styles.routePoint
-                  }
-                >
+                {routeData.destination && (
                   <View
                     style={
-                      styles.routeDotDest
-                    }
-                  />
-
-                  <View
-                    style={
-                      styles.routePointText
+                      styles.routePoint
                     }
                   >
-                    <Text
+                    <View
                       style={
-                        styles.routeSmall
+                        styles.routeDotDest
                       }
-                    >
-                      DESTINATION
-                    </Text>
+                    />
 
-                    <Text
+                    <View
                       style={
-                        styles.routePlace
+                        styles.routePointText
                       }
-                      numberOfLines={1}
                     >
-                      {routeData.destination.name}
-                    </Text>
+                      <Text
+                        style={
+                          styles.routeSmall
+                        }
+                      >
+                        DESTINATION
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.routePlace
+                        }
+                        numberOfLines={1}
+                      >
+                        {routeData.destination.name}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              )}
+                )}
 
-            </View>
-          )}
+              </View>
+            )}
 
 
           {/* CREW */}
@@ -2403,7 +2400,7 @@ export default function LiveRideMap() {
                   style={[
                     styles.onlineDot,
                     liveCaptainMember &&
-                      styles.onlineDotGreen,
+                    styles.onlineDotGreen,
                   ]}
                 />
 
@@ -2520,7 +2517,7 @@ export default function LiveRideMap() {
                         style={[
                           styles.onlineDot,
                           (isMe || isLive) &&
-                            styles.onlineDotBlue,
+                          styles.onlineDotBlue,
                         ]}
                       />
 
@@ -2532,8 +2529,8 @@ export default function LiveRideMap() {
                         {isMe
                           ? 'YOU'
                           : isLive
-                          ? 'LIVE'
-                          : 'ONLINE'}
+                            ? 'LIVE'
+                            : 'ONLINE'}
                       </Text>
                     </View>
 
@@ -2586,7 +2583,7 @@ export default function LiveRideMap() {
               style={[
                 styles.gpsDot,
                 location &&
-                  styles.gpsDotLive,
+                styles.gpsDotLive,
               ]}
             />
 
@@ -2596,10 +2593,10 @@ export default function LiveRideMap() {
               {locationLoading
                 ? 'GETTING GPS...'
                 : !locationPermission
-                ? 'GPS PERMISSION REQUIRED'
-                : location
-                ? 'YOUR GPS IS LIVE'
-                : 'ACQUIRING GPS'}
+                  ? 'GPS PERMISSION REQUIRED'
+                  : location
+                    ? 'YOUR GPS IS LIVE'
+                    : 'ACQUIRING GPS'}
             </Text>
           </View>
 

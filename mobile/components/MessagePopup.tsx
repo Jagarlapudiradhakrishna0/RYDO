@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,28 @@ export default function MessagePopup() {
   const translateY = useRef(new Animated.Value(-150)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<any>(null);
+
+  const dismissPopup = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    Animated.parallel([
+      Animated.timing(translateY, {
+        toValue: -150,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setCurrentMessage(null);
+    });
+  }, [translateY, opacity]);
 
   useEffect(() => {
     const unsubscribe = communicationService.subscribeToPopups((msg) => {
@@ -48,29 +70,7 @@ export default function MessagePopup() {
       unsubscribe();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [translateY, opacity]);
-
-  const dismissPopup = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-
-    Animated.parallel([
-      Animated.timing(translateY, {
-        toValue: -150,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacity, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setCurrentMessage(null);
-    });
-  };
+  }, [translateY, opacity, dismissPopup]);
 
   const handleOpen = () => {
     if (!currentMessage) return;
@@ -120,7 +120,7 @@ export default function MessagePopup() {
         </Text>
 
         <Text style={styles.body} numberOfLines={2}>
-          "{currentMessage.messageText}"
+          {`"${currentMessage.messageText}"`}
         </Text>
       </TouchableOpacity>
     </Animated.View>
