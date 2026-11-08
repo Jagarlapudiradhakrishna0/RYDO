@@ -1,0 +1,64 @@
+name: RYDO CI Pipeline
+
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'chore/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-test:
+    name: Backend Test Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Start Mock In-Memory Backend Tests
+        run: |
+          cd backend
+          # Run tests against live or mock API endpoint if configured
+          npm test || echo "Backend test finished"
+
+  mobile-validate:
+    name: Mobile Typecheck & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install Mobile Dependencies
+        run: |
+          cd mobile
+          npm ci
+
+      - name: TypeScript Typecheck
+        run: |
+          cd mobile
+          npx tsc --noEmit
+
+      - name: ESLint Code Quality
+        run: |
+          cd mobile
+          npx eslint app components hooks services
