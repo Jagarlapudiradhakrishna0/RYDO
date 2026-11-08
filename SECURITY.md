@@ -48,3 +48,4 @@ If you discover a security vulnerability or credential exposure within RYDO:
 - **Data Sanitization:** Endpoints returning user data must employ `User.toSafeObject()` to strip credentials and mask emergency contact numbers.
 - **Environment Isolation:** Never commit `.env` or credential files to source control. Use environment variables exclusively.
 - **WebSocket Room Boundaries:** All real-time telemetry must remain partitioned by convoy `rideCode` rooms (`io.to(rideCode)`).
+

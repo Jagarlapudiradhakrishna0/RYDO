@@ -18,3 +18,4 @@ Before submitting this pull request, please verify:
 - [ ] I have executed `npm test` in `backend/` and verified all tests pass.
 - [ ] No hardcoded passwords, tokens, or personal secrets are committed.
 - [ ] Any new documentation matches the actual codebase implementation.
+
