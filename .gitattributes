@@ -1,0 +1,29 @@
+# Auto-detect text files and perform LF normalization on checkout
+* text=auto eol=lf
+
+# Explicit text files
+*.js text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.sh text eol=lf
+*.env.example text eol=lf
+
+# Binary files (do not modify)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.dex binary
+*.jks binary
+*.p8 binary
+*.p12 binary
+*.key binary

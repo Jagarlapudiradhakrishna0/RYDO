@@ -1,6 +1,10 @@
 # =====================================================
-# ENVIRONMENT AND SECRET FILES
+# RYDO MASTER GITIGNORE CONFIGURATION
 # =====================================================
+
+# -----------------------------------------------------
+# ENVIRONMENT VARIABLES & SENSITIVE SECRETS
+# -----------------------------------------------------
 .env
 .env.*
 !.env.example
@@ -10,49 +14,94 @@ backend/.env.*
 mobile/.env
 mobile/.env.*
 !mobile/.env.example
+*.local
+*.pem
+*.key
+*.cert
+*.crt
 
-# =====================================================
-# DEPENDENCIES
-# =====================================================
+# -----------------------------------------------------
+# DEPENDENCY DIRECTORIES
+# -----------------------------------------------------
 node_modules/
 backend/node_modules/
 mobile/node_modules/
-
-# =====================================================
-# BUILD & GENERATED OUTPUTS
-# =====================================================
-.expo/
-mobile/.expo/
-dist/
-build/
-web-build/
-coverage/
-*.tsbuildinfo
-.metro-health-check*
-
-# =====================================================
-# LOGS & DEBUG FILES
-# =====================================================
-*.log
+package-lock.json.bak
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# =====================================================
-# NATIVE KEYSTORES & CERTIFICATES
-# =====================================================
+# -----------------------------------------------------
+# EXPO & METRO BUNDLER CACHE
+# -----------------------------------------------------
+.expo/
+mobile/.expo/
+.metro-health-check*
+*.tsbuildinfo
+
+# -----------------------------------------------------
+# BUILD ARTIFACTS & COMPILED OUTPUTS
+# -----------------------------------------------------
+dist/
+mobile/dist/
+build/
+mobile/build/
+web-build/
+mobile/web-build/
+coverage/
+*.apk
+*.aab
+*.ipa
+*.dex
+
+# -----------------------------------------------------
+# NATIVE MOBILE (ANDROID & IOS GENERATED FILES)
+# -----------------------------------------------------
+android/
+ios/
+mobile/android/
+mobile/ios/
 *.jks
 *.p8
 *.p12
-*.key
-*.pem
+*.keystore
 *.mobileprovision
 
-# =====================================================
-# OS & EDITOR FILES
-# =====================================================
+# -----------------------------------------------------
+# RUNTIME LOGS & SYSTEM TEMPORARY FILES
+# -----------------------------------------------------
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# -----------------------------------------------------
+# OPERATING SYSTEM & EDITOR SPECIFIC FILES
+# -----------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 .vscode/
+mobile/.vscode/
+!.vscode/extensions.json
 .idea/
+*.sublime-project
+*.sublime-workspace
 .claude/
+.gemini/
+
+# -----------------------------------------------------
+# LOCAL DATABASE DUMPS & BACKUPS
+# -----------------------------------------------------
+*.dump
+*.sql
+*.sqlite
+*.sqlite3
+dump/
