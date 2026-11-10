@@ -37,7 +37,6 @@ import { SosButton } from '@/components/SosButton';
 import { SosEmergencyOverlay } from '@/components/SosEmergencyOverlay';
 import { SosEvent } from '@/services/sosService';
 import { API_URL } from '@/constants/network';
-import { DARK_MAP_STYLE } from '@/constants/mapStyle';
 
 /* =====================================================
    OSRM

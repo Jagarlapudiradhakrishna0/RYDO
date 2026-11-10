@@ -53,7 +53,7 @@ class CommunicationManager {
         );
         this.isSoundLoaded = true;
       }
-    } catch (_) {
+    } catch {
       this.isSoundLoaded = false;
     }
   }
@@ -178,7 +178,7 @@ class CommunicationManager {
           try {
             this.notificationPlayer.seekTo(0);
             this.notificationPlayer.play();
-          } catch (_) {}
+          } catch {}
         }
       }
 

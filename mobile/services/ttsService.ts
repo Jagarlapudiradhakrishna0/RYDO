@@ -39,7 +39,6 @@ class TtsService {
       const matchingVoice = this.availableVoices.find((v) => {
         const name = (v.name || '').toLowerCase();
         const id = (v.identifier || '').toLowerCase();
-        const quality = ((v as any).quality || '').toLowerCase();
 
         // Check if voice name or id specifically tags male/female
         if (targetGender === 'female') {
@@ -102,7 +101,7 @@ class TtsService {
       // Cancel any ongoing speech so new high-priority message plays immediately
       try {
         await Speech.stop();
-      } catch (_) {}
+      } catch {}
 
       const voiceId = await this.getBestVoice(settings.voiceGender);
 
@@ -145,7 +144,7 @@ class TtsService {
     try {
       await Speech.stop();
       this.isSpeaking = false;
-    } catch (_) {}
+    } catch {}
   }
 }
 

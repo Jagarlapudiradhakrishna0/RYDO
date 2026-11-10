@@ -151,7 +151,7 @@ class SosEmergencyManager {
       try {
         if (s.pause) s.pause();
         if (s.release) s.release();
-      } catch (_) {}
+      } catch {}
     }
   }
 
