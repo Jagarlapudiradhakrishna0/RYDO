@@ -4,21 +4,32 @@
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/images/splash-icon.png",
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.rydov1.mobile",
+      "versionCode": 1,
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDummyKeyForMapsInitializationToPreventCrash"
         }
       },
       "adaptiveIcon": {
+        "foregroundImage": "./assets/images/splash-icon.png",
         "backgroundColor": "#000000"
       },
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.WAKE_LOCK",
+        "android.permission.VIBRATE",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
     "ios": {
@@ -32,7 +43,11 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "RYDO uses your location to show your position during a ride."
+          "locationWhenInUsePermission": "RYDO requires your location to display your position and share real-time GPS coordinates with your motorcycle convoy.",
+          "locationAlwaysAndWhenInUsePermission": "RYDO requires background location to track and coordinate convoy positions while navigating or when the screen is locked.",
+          "locationAlwaysPermission": "RYDO requires background location to keep your convoy updated with your real-time position during group rides.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

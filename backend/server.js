@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const mongoose = require('mongoose');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -9,6 +10,7 @@ require('dotenv').config();
 const rideRoutes = require('./routes/rideRoutes');
 const authRoutes = require('./routes/authRoutes');
 const initializeRideSocket = require('./socket/rideSocket');
+const { authLimiter, sosLimiter, generalLimiter } = require('./middleware/rateLimiter');
 
 /* =====================================================
    APP
@@ -59,8 +61,15 @@ initializeRideSocket(io);
 app.set('io', io);
 
 /* =====================================================
-   MIDDLEWARE
+   MIDDLEWARE & SECURITY HEADERS
 ===================================================== */
+
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: false,
+  })
+);
 
 app.use(
   cors({
@@ -84,6 +93,15 @@ app.use(
 );
 
 app.use(express.json());
+
+/* =====================================================
+   RATE LIMITING MIDDLEWARE
+===================================================== */
+
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api/rides/:rideCode/sos', sosLimiter);
+app.use('/api/', generalLimiter);
 
 /* =====================================================
    REQUEST LOGGER & PERFORMANCE MONITOR

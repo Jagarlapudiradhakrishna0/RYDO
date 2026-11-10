@@ -1150,9 +1150,9 @@ export default function LiveRideMap() {
             await Location.watchPositionAsync(
               {
                 accuracy:
-                  Location.Accuracy.BestForNavigation,
+                  Location.Accuracy.High,
 
-                timeInterval: 2000,
+                timeInterval: 2500,
 
                 distanceInterval: 5,
               },

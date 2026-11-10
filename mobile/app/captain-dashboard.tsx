@@ -1788,10 +1788,10 @@ export default function CaptainDashboard() {
                   Location.Accuracy.High,
 
                 timeInterval:
-                  2000,
+                  2500,
 
                 distanceInterval:
-                  3,
+                  5,
               },
 
               newLocation => {
